@@ -31,7 +31,7 @@ PROXY_USERNAME = os.getenv("PROXY_USERNAME")
 PROXY_PASSWORD = os.getenv("PROXY_PASSWORD")
 
 # ===== Konfigurasi Logging
-log_dir = Path(__file__).resolve().parents[2] /  "logs"
+log_dir = Path(__file__).resolve().parents[1] /  "logs"
 log_dir.mkdir(parents=True, exist_ok=True)
 
 # Nama file log menggunakan tanggal saat *pertama kali program dijalankan*
@@ -248,6 +248,30 @@ class CarlistMyService:
 
                 # Ambil juga gambar dari #details-gallery img (jaga-jaga)
                 soup = BeautifulSoup(self.page.content(), "html.parser")
+                # --- Breadcrumb mapping ---
+                spans = soup.select("#listing-detail li > a > span")
+                brand = model_group = model = variant = None
+                
+                # Pastikan model_group hanya diisi jika ada 6 spans
+                if len(spans) == 6:
+                    brand = spans[2].text.strip()
+                    model_group = spans[3].text.strip()  
+                    model = spans[4].text.strip()
+                    variant = spans[5].text.strip()
+                elif len(spans) == 5:
+                    brand = spans[2].text.strip()
+                    model = spans[3].text.strip()
+                    variant = spans[4].text.strip()
+                elif len(spans) == 4:
+                    brand = spans[2].text.strip()
+                    model = spans[3].text.strip()
+                
+                brand = (brand or "UNKNOWN").upper()
+                model = (model or "UNKNOWN").upper()
+                variant = (variant or "NO VARIANT").upper()
+                # model_group hanya akan terisi jika len(spans) == 6, selain itu akan "NO MODEL_GROUP"
+                model_group = model_group.upper() if model_group else "NO MODEL_GROUP"
+
                 gallery_imgs = [img.get("src") for img in soup.select("#details-gallery img") if img.get("src")]
                 all_img_urls = set(gallery_imgs) | meta_img_urls
                 image = list(all_img_urls)
@@ -258,9 +282,8 @@ class CarlistMyService:
                     take_screenshot(self.page, "cloudflare_detected")
                     retry_count += 1
                     self.retry_with_new_proxy()
-                    continue  # Coba ulang URL yang sama
+                    continue  
                 else:
-                    # Lanjutkan parsing HTML
                     soup = BeautifulSoup(self.page.content(), "html.parser")
 
                     def extract(selector):
@@ -277,25 +300,21 @@ class CarlistMyService:
                             return valid_spans[0]
                         return ""
 
-                    brand = extract("#listing-detail li:nth-child(3) > a > span")
-                    model = extract("#listing-detail li:nth-child(4) > a > span")
-                    variant = extract("#listing-detail li:nth-child(5) > a > span")
                     information_ads = extract("div:nth-child(1) > span.u-color-muted")
                     location = get_location_parts(soup)
-
                     condition = extract("div.owl-stage div:nth-child(1) span.u-text-bold")
                     price_string = extract("div.listing__item-price > h3")
                     year = extract("div.owl-stage div:nth-child(2) span.u-text-bold")
                     mileage = extract("div.owl-stage div:nth-child(3) span.u-text-bold")
                     transmission = extract("div.owl-stage div:nth-child(6) span.u-text-bold")
                     seat_capacity = extract("div.owl-stage div:nth-child(7) span.u-text-bold")
-
                     price = int(re.sub(r"[^\d]", "", price_string)) if price_string else 0
                     year_int = int(re.search(r"\d{4}", year).group()) if year else 0
 
                     return {
                         "listing_url": url,
                         "brand": brand,
+                        "model_group": model_group,
                         "model": model,
                         "variant": variant,
                         "information_ads": information_ads,
@@ -347,9 +366,11 @@ class CarlistMyService:
             row = self.cursor.fetchone()
             now = datetime.now()
             image_urls = car.get("image") or []
-            brand = car.get("brand") or "unknown"
-            model = car.get("model") or "unknown"
-            variant = car.get("variant") or "unknown"
+            # Pastikan uppercase dan default value sebelum masuk DB
+            brand = (car.get("brand") or "unknown").upper()
+            model_group = (car.get("model_group") or "NO MODEL_GROUP").upper()
+            model = (car.get("model") or "unknown").upper()
+            variant = (car.get("variant") or "NO VARIANT").upper()
             car_id = None
 
             if row:
@@ -360,18 +381,17 @@ class CarlistMyService:
                         VALUES (%s, %s, %s)
                     """, (car_id, old_price, car["price"]))
 
-                # Download images (tidak disimpan ke database)
                 self.download_images(image_urls, brand, model, variant, car_id)
 
                 self.cursor.execute(f"""
                     UPDATE {DB_TABLE_SCRAP}
-                    SET brand=%s, model=%s, variant=%s, information_ads=%s,
+                    SET brand=%s, model_group=%s, model=%s, variant=%s, information_ads=%s,
                         location=%s, condition=%s, price=%s, year=%s, mileage=%s,
                         transmission=%s, seat_capacity=%s, engine_cc=%s, fuel_type=%s,
                         last_scraped_at=%s, version=%s
                     WHERE id=%s
                 """, (
-                    car.get("brand"), car.get("model"), car.get("variant"), car.get("information_ads"),
+                    brand, model_group, model, variant, car.get("information_ads"),
                     car.get("location"), car.get("condition"),car.get("price"), car.get("year"), car.get("mileage"),
                     car.get("transmission"), car.get("seat_capacity"), car.get("engine_cc"), car.get("fuel_type"),
                     now, version + 1, car_id
@@ -379,18 +399,17 @@ class CarlistMyService:
             else:
                 self.cursor.execute(f"""
                     INSERT INTO {DB_TABLE_SCRAP} (
-                        listing_url, brand, model, variant, information_ads, location, condition,
+                        listing_url, brand, model_group, model, variant, information_ads, location, condition,
                         price, year, mileage, transmission, seat_capacity, engine_cc, fuel_type, version
-                    ) VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
+                    ) VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
                     RETURNING id
                 """, (
-                    car["listing_url"], car.get("brand"), car.get("model"), car.get("variant"),
+                    car["listing_url"], brand, model_group, model, variant,
                     car.get("information_ads"), car.get("location"), car.get("condition"),car.get("price"),
                     car.get("year"), car.get("mileage"), car.get("transmission"),
                     car.get("seat_capacity"), car.get("engine_cc"), car.get("fuel_type"), 1
                 ))
                 car_id = self.cursor.fetchone()[0]
-                # Download images (tidak disimpan ke database)
                 self.download_images(image_urls, brand, model, variant, car_id)
 
             self.conn.commit()
@@ -402,6 +421,7 @@ class CarlistMyService:
     def scrape_all_brands(self, start_page=1, max_pages=None):
         self.reset_scraping()
         base_url = os.getenv("CARLISTMY_LISTING_URL")
+        limit_scrap = int(os.getenv("LIMIT_SCRAP", "0"))
         if not base_url:
             logging.error("❌ CARLISTMY_LISTING_URL belum di-set di .env")
             return
@@ -413,6 +433,7 @@ class CarlistMyService:
             logging.warning(f"Gagal get IP: {e}")
 
         page = start_page
+        total_scraped = 0
         while not self.stop_flag:
             paginated_url = f"{base_url}&page={page}"
             max_page_retries = 3
@@ -478,11 +499,16 @@ class CarlistMyService:
             for url in urls:
                 if self.stop_flag:
                     break
+                if limit_scrap and total_scraped >= limit_scrap:
+                    logging.info(f"🏁 Limit scraping {limit_scrap} listing_url tercapai. Proses scraping selesai.")
+                    self.stop_flag = True
+                    break
                 logging.info(f"🔍 Scraping detail: {url}")
                 detail = self.scrape_detail(url)
                 if detail:
                     self.save_to_db(detail)
                     self.listing_count += 1
+                    total_scraped += 1
                     time.sleep(random.uniform(20, 40))
 
                     if self.listing_count >= self.batch_size:
@@ -498,6 +524,9 @@ class CarlistMyService:
             page += 1
             if max_pages and page > max_pages:
                 logging.info(f"🏁 Selesai scraping sampai halaman {max_pages}")
+                break
+            if limit_scrap and total_scraped >= limit_scrap:
+                logging.info(f"🏁 Limit scraping {limit_scrap} listing_url tercapai. Proses scraping selesai.")
                 break
             time.sleep(random.uniform(5, 10))
 
