@@ -4,6 +4,7 @@ import random
 import time
 import logging
 import pandas as pd
+import requests
 from datetime import datetime
 from bs4 import BeautifulSoup
 from dotenv import load_dotenv
@@ -234,7 +235,22 @@ class CarlistMyService:
                 except Exception as e:
                     logging.warning(f"Gagal mengambil data spesifikasi: {e}")
 
+                # Ambil semua gambar dari meta tag <meta name='prerender'>
+                meta_imgs = self.page.query_selector_all("head > meta[name='prerender']")
+                meta_img_urls = set()
+                try:
+                    for meta in meta_imgs:
+                        content = meta.get_attribute("content")
+                        if content and content.startswith("https://"):
+                            meta_img_urls.add(content)
+                except Exception as e:
+                    logging.warning(f"Gagal mengambil gambar dari meta prerender: {e}")
+
+                # Ambil juga gambar dari #details-gallery img (jaga-jaga)
                 soup = BeautifulSoup(self.page.content(), "html.parser")
+                gallery_imgs = [img.get("src") for img in soup.select("#details-gallery img") if img.get("src")]
+                all_img_urls = set(gallery_imgs) | meta_img_urls
+                image = list(all_img_urls)
 
                 page_title = self.page.title()
                 if page_title.strip() == "Just a moment...":
@@ -244,6 +260,7 @@ class CarlistMyService:
                     self.retry_with_new_proxy()
                     continue  # Coba ulang URL yang sama
                 else:
+                    # Lanjutkan parsing HTML
                     soup = BeautifulSoup(self.page.content(), "html.parser")
 
                     def extract(selector):
@@ -272,9 +289,6 @@ class CarlistMyService:
                     mileage = extract("div.owl-stage div:nth-child(3) span.u-text-bold")
                     transmission = extract("div.owl-stage div:nth-child(6) span.u-text-bold")
                     seat_capacity = extract("div.owl-stage div:nth-child(7) span.u-text-bold")
-
-                    img_tags = soup.select("#details-gallery img")
-                    image = [img.get("src") for img in img_tags if img.get("src")]
 
                     price = int(re.sub(r"[^\d]", "", price_string)) if price_string else 0
                     year_int = int(re.search(r"\d{4}", year).group()) if year else 0
@@ -306,11 +320,37 @@ class CarlistMyService:
         logging.error(f"❌ Gagal mengambil data dari {url} setelah {max_retries} percobaan.")
         return None
 
+    def download_images(self, image_urls, brand, model, variant, car_id):
+        """
+        Download semua gambar ke folder images/brand/model/variant/id/
+        """
+        base_dir = Path("images") / str(brand).replace("/", "_") / str(model).replace("/", "_") / str(variant).replace("/", "_") / str(car_id)
+        base_dir.mkdir(parents=True, exist_ok=True)
+        local_paths = []
+        for idx, url in enumerate(image_urls):
+            try:
+                ext = os.path.splitext(url)[1].split("?")[0] or ".jpg"
+                file_name = f"image_{idx+1}{ext}"
+                file_path = base_dir / file_name
+                resp = requests.get(url, timeout=30)
+                if resp.status_code == 200:
+                    with open(file_path, "wb") as f:
+                        f.write(resp.content)
+                    local_paths.append(str(file_path))
+            except Exception as e:
+                logging.warning(f"Gagal download gambar {url}: {e}")
+        return local_paths
+
     def save_to_db(self, car):
         try:
             self.cursor.execute(f"SELECT id, price, version FROM {DB_TABLE_SCRAP} WHERE listing_url = %s", (car["listing_url"],))
             row = self.cursor.fetchone()
             now = datetime.now()
+            image_urls = car.get("image") or []
+            brand = car.get("brand") or "unknown"
+            model = car.get("model") or "unknown"
+            variant = car.get("variant") or "unknown"
+            car_id = None
 
             if row:
                 car_id, old_price, version = row
@@ -320,31 +360,38 @@ class CarlistMyService:
                         VALUES (%s, %s, %s)
                     """, (car_id, old_price, car["price"]))
 
+                # Download images (tidak disimpan ke database)
+                self.download_images(image_urls, brand, model, variant, car_id)
+
                 self.cursor.execute(f"""
                     UPDATE {DB_TABLE_SCRAP}
                     SET brand=%s, model=%s, variant=%s, information_ads=%s,
                         location=%s, condition=%s, price=%s, year=%s, mileage=%s,
-                        transmission=%s, seat_capacity=%s, image=%s, engine_cc=%s, fuel_type=%s,
+                        transmission=%s, seat_capacity=%s, engine_cc=%s, fuel_type=%s,
                         last_scraped_at=%s, version=%s
                     WHERE id=%s
                 """, (
                     car.get("brand"), car.get("model"), car.get("variant"), car.get("information_ads"),
                     car.get("location"), car.get("condition"),car.get("price"), car.get("year"), car.get("mileage"),
-                    car.get("transmission"), car.get("seat_capacity"), car.get("image"), car.get("engine_cc"), car.get("fuel_type"),
+                    car.get("transmission"), car.get("seat_capacity"), car.get("engine_cc"), car.get("fuel_type"),
                     now, version + 1, car_id
                 ))
             else:
                 self.cursor.execute(f"""
                     INSERT INTO {DB_TABLE_SCRAP} (
                         listing_url, brand, model, variant, information_ads, location, condition,
-                        price, year, mileage, transmission, seat_capacity, image, engine_cc, fuel_type, version
-                    ) VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
+                        price, year, mileage, transmission, seat_capacity, engine_cc, fuel_type, version
+                    ) VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
+                    RETURNING id
                 """, (
                     car["listing_url"], car.get("brand"), car.get("model"), car.get("variant"),
                     car.get("information_ads"), car.get("location"), car.get("condition"),car.get("price"),
                     car.get("year"), car.get("mileage"), car.get("transmission"),
-                    car.get("seat_capacity"), car.get("image"), car.get("engine_cc"), car.get("fuel_type"), 1
+                    car.get("seat_capacity"), car.get("engine_cc"), car.get("fuel_type"), 1
                 ))
+                car_id = self.cursor.fetchone()[0]
+                # Download images (tidak disimpan ke database)
+                self.download_images(image_urls, brand, model, variant, car_id)
 
             self.conn.commit()
             logging.info(f"✅ Data untuk {car['listing_url']} berhasil disimpan/diupdate.")
@@ -506,8 +553,7 @@ class CarlistMyService:
                             (listing_url, brand, model, variant, information_ads, location, condition,
                              price, year, mileage, transmission, seat_capacity, image, last_scraped_at)
                         VALUES
-                            (%s, %s, %s, %s, %s, %s,
-                             %s, %s, %s, %s, %s, %s, %s)
+                            (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
                     """
                     self.cursor.execute(insert_query, (
                         listing_url,
