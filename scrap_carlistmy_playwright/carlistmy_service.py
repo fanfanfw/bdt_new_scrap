@@ -195,7 +195,47 @@ class CarlistMyService:
                 self.page.goto(url, wait_until="networkidle", timeout=60000)
                 time.sleep(7)
 
-                # Cek jika halaman diblokir Cloudflare
+                try:
+                    # Klik tab "Specification" (klik <a> kedua di tab list)
+                    spec_tab_selector = (
+                        "#listing-detail > section:nth-child(2) > div > div > "
+                        "div.u-width-4\/6.u-width-1\\@mobile.u-flex.u-flex--column.u-padding-left-sm.u-padding-right-md.u-padding-top-none.u-padding-top-none\\@mobile.u-padding-right-sm\\@mobile "
+                        "> div:nth-child(1) > div > div.c-tabs--overflow > div > a:nth-child(2)"
+                    )
+                    if self.page.is_visible(spec_tab_selector):
+                        self.page.click(spec_tab_selector)
+                        # Tunggu konten tab spesifikasi muncul
+                        self.page.wait_for_selector(
+                            '#tab-specifications span.u-text-bold.u-width-1\\/2.u-align-right',
+                            timeout=7000
+                        )
+                        time.sleep(1)
+                except Exception as e:
+                    logging.warning(f"Gagal klik tab specifications atau menunggu konten: {e}")
+
+                engine_cc = None
+                fuel_type = None
+                try:
+                    if self.page.is_visible('div#tab-specifications'):
+                        try:
+                            engine_cc_elem = self.page.query_selector(
+                                '#tab-specifications > div:nth-child(3) > div:nth-child(2) > div > span.u-text-bold.u-width-1\\/2.u-align-right'
+                            )
+                            engine_cc = engine_cc_elem.inner_text().strip() if engine_cc_elem else None
+                        except Exception as e:
+                            logging.warning(f"Gagal mengambil engine_cc: {e}")
+                        try:
+                            fuel_type_elem = self.page.query_selector(
+                                '#tab-specifications > div:nth-child(3) > div:nth-child(8) > div > span.u-text-bold.u-width-1\\/2.u-align-right'
+                            )
+                            fuel_type = fuel_type_elem.inner_text().strip() if fuel_type_elem else None
+                        except Exception as e:
+                            logging.warning(f"Gagal mengambil fuel_type: {e}")
+                except Exception as e:
+                    logging.warning(f"Gagal mengambil data spesifikasi: {e}")
+
+                soup = BeautifulSoup(self.page.content(), "html.parser")
+
                 page_title = self.page.title()
                 if page_title.strip() == "Just a moment...":
                     logging.warning("🛑 Halaman diblokir Cloudflare. Mengganti proxy dan retry...")
@@ -204,7 +244,6 @@ class CarlistMyService:
                     self.retry_with_new_proxy()
                     continue  # Coba ulang URL yang sama
                 else:
-                    # Lanjutkan parsing HTML
                     soup = BeautifulSoup(self.page.content(), "html.parser")
 
                     def extract(selector):
@@ -224,17 +263,18 @@ class CarlistMyService:
                     brand = extract("#listing-detail li:nth-child(3) > a > span")
                     model = extract("#listing-detail li:nth-child(4) > a > span")
                     variant = extract("#listing-detail li:nth-child(5) > a > span")
-                    informasi_iklan = extract("div:nth-child(1) > span.u-color-muted")
-                    lokasi = get_location_parts(soup)
+                    information_ads = extract("div:nth-child(1) > span.u-color-muted")
+                    location = get_location_parts(soup)
 
+                    condition = extract("div.owl-stage div:nth-child(1) span.u-text-bold")
                     price_string = extract("div.listing__item-price > h3")
                     year = extract("div.owl-stage div:nth-child(2) span.u-text-bold")
-                    millage = extract("div.owl-stage div:nth-child(3) span.u-text-bold")
+                    mileage = extract("div.owl-stage div:nth-child(3) span.u-text-bold")
                     transmission = extract("div.owl-stage div:nth-child(6) span.u-text-bold")
                     seat_capacity = extract("div.owl-stage div:nth-child(7) span.u-text-bold")
 
                     img_tags = soup.select("#details-gallery img")
-                    gambar = [img.get("src") for img in img_tags if img.get("src")]
+                    image = [img.get("src") for img in img_tags if img.get("src")]
 
                     price = int(re.sub(r"[^\d]", "", price_string)) if price_string else 0
                     year_int = int(re.search(r"\d{4}", year).group()) if year else 0
@@ -244,14 +284,17 @@ class CarlistMyService:
                         "brand": brand,
                         "model": model,
                         "variant": variant,
-                        "informasi_iklan": informasi_iklan,
-                        "lokasi": lokasi,
+                        "information_ads": information_ads,
+                        "location": location,
+                        "condition": condition,
                         "price": price,
                         "year": year_int,
-                        "millage": millage,
+                        "mileage": mileage,
                         "transmission": transmission,
                         "seat_capacity": seat_capacity,
-                        "gambar": gambar,
+                        "image": image,
+                        "engine_cc": engine_cc,
+                        "fuel_type": fuel_type,
                     }
 
             except Exception as e:
@@ -279,28 +322,28 @@ class CarlistMyService:
 
                 self.cursor.execute(f"""
                     UPDATE {DB_TABLE_SCRAP}
-                    SET brand=%s, model=%s, variant=%s, informasi_iklan=%s,
-                        lokasi=%s, price=%s, year=%s, millage=%s,
-                        transmission=%s, seat_capacity=%s, gambar=%s,
+                    SET brand=%s, model=%s, variant=%s, information_ads=%s,
+                        location=%s, condition=%s, price=%s, year=%s, mileage=%s,
+                        transmission=%s, seat_capacity=%s, image=%s, engine_cc=%s, fuel_type=%s,
                         last_scraped_at=%s, version=%s
                     WHERE id=%s
                 """, (
-                    car.get("brand"), car.get("model"), car.get("variant"), car.get("informasi_iklan"),
-                    car.get("lokasi"), car.get("price"), car.get("year"), car.get("millage"),
-                    car.get("transmission"), car.get("seat_capacity"), car.get("gambar"),
+                    car.get("brand"), car.get("model"), car.get("variant"), car.get("information_ads"),
+                    car.get("location"), car.get("condition"),car.get("price"), car.get("year"), car.get("mileage"),
+                    car.get("transmission"), car.get("seat_capacity"), car.get("image"), car.get("engine_cc"), car.get("fuel_type"),
                     now, version + 1, car_id
                 ))
             else:
                 self.cursor.execute(f"""
                     INSERT INTO {DB_TABLE_SCRAP} (
-                        listing_url, brand, model, variant, informasi_iklan, lokasi,
-                        price, year, millage, transmission, seat_capacity, gambar, version
-                    ) VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
+                        listing_url, brand, model, variant, information_ads, location, condition,
+                        price, year, mileage, transmission, seat_capacity, image, engine_cc, fuel_type, version
+                    ) VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
                 """, (
                     car["listing_url"], car.get("brand"), car.get("model"), car.get("variant"),
-                    car.get("informasi_iklan"), car.get("lokasi"), car.get("price"),
-                    car.get("year"), car.get("millage"), car.get("transmission"),
-                    car.get("seat_capacity"), car.get("gambar"), 1
+                    car.get("information_ads"), car.get("location"), car.get("condition"),car.get("price"),
+                    car.get("year"), car.get("mileage"), car.get("transmission"),
+                    car.get("seat_capacity"), car.get("image"), car.get("engine_cc"), car.get("fuel_type"), 1
                 ))
 
             self.conn.commit()
@@ -359,20 +402,25 @@ class CarlistMyService:
 
             html = self.page.content()
             soup = BeautifulSoup(html, "html.parser")
-            link_tags = soup.select("a.ellipsize.js-ellipsize-text")
+            listing_divs = soup.select('[id^="listing_"]')
 
             urls = []
-            for tag in link_tags:
-                href = tag.get("href")
-                if href:
-                    if href.startswith("/"):
-                        href = "https://www.carlist.my" + href
-                    urls.append(href)
+            for div in listing_divs:
+                tag_elem = div.select_one("span.visuallyhidden--small")
+                tag_text = tag_elem.text.strip() if tag_elem else ""
+                if tag_text == "Featured":
+                    link_elem = div.select_one("h2 a")
+                    if link_elem:
+                        href = link_elem.get("href")
+                        if href:
+                            if href.startswith("/"):
+                                href = "https://www.carlist.my" + href
+                            urls.append(href)
             urls = list(set(urls))
-            logging.info(f"📄 Ditemukan {len(urls)} listing URL di halaman {page}")
+            logging.info(f"📄 Ditemukan {len(urls)} listing URL di halaman {page} yang berlabel 'Featured'.")
 
             if not urls:
-                logging.warning(f"📄 Ditemukan 0 listing URL di halaman {page}")
+                logging.warning(f"📄 Ditemukan 0 listing URL dengan tag 'Featured' di halaman {page}")
                 take_screenshot(self.page, f"no_listing_page{page}")
                 self.stop_flag = True
                 break
@@ -416,7 +464,6 @@ class CarlistMyService:
         """
         logging.info(f"Memulai sinkronisasi data dari {DB_TABLE_SCRAP} ke {DB_TABLE_PRIMARY}...")
         try:
-            # Sinkronisasi data dari cars_scrap ke cars (update atau insert data mobil)
             fetch_query = f"SELECT * FROM {DB_TABLE_SCRAP};"
             self.cursor.execute(fetch_query)
             rows = self.cursor.fetchall()
@@ -432,31 +479,32 @@ class CarlistMyService:
                 if result:
                     update_query = f"""
                         UPDATE {DB_TABLE_PRIMARY}
-                        SET brand=%s, model=%s, variant=%s, informasi_iklan=%s,
-                            lokasi=%s, price=%s, year=%s, millage=%s, transmission=%s,
-                            seat_capacity=%s, gambar=%s, last_scraped_at=%s
+                        SET brand=%s, model=%s, variant=%s, information_ads=%s,
+                            location=%s, condition=%s,price=%s, year=%s, mileage=%s, transmission=%s,
+                            seat_capacity=%s, image=%s, last_scraped_at=%s
                         WHERE listing_url=%s
                     """
                     self.cursor.execute(update_query, (
                         row[col_names.index("brand")],
                         row[col_names.index("model")],
                         row[col_names.index("variant")],
-                        row[col_names.index("informasi_iklan")],
-                        row[col_names.index("lokasi")],
+                        row[col_names.index("information_ads")],
+                        row[col_names.index("location")],
+                        row[col_names.index("condition")],
                         row[col_names.index("price")],
                         row[col_names.index("year")],
-                        row[col_names.index("millage")],
+                        row[col_names.index("mileage")],
                         row[col_names.index("transmission")],
                         row[col_names.index("seat_capacity")],
-                        row[col_names.index("gambar")],
+                        row[col_names.index("image")],
                         row[col_names.index("last_scraped_at")],
                         listing_url
                     ))
                 else:
                     insert_query = f"""
                         INSERT INTO {DB_TABLE_PRIMARY}
-                            (listing_url, brand, model, variant, informasi_iklan, lokasi,
-                             price, year, millage, transmission, seat_capacity, gambar, last_scraped_at)
+                            (listing_url, brand, model, variant, information_ads, location, condition,
+                             price, year, mileage, transmission, seat_capacity, image, last_scraped_at)
                         VALUES
                             (%s, %s, %s, %s, %s, %s,
                              %s, %s, %s, %s, %s, %s, %s)
@@ -466,14 +514,15 @@ class CarlistMyService:
                         row[col_names.index("brand")],
                         row[col_names.index("model")],
                         row[col_names.index("variant")],
-                        row[col_names.index("informasi_iklan")],
-                        row[col_names.index("lokasi")],
+                        row[col_names.index("information_ads")],
+                        row[col_names.index("location")],
+                        row[col_names.index("condition")],
                         row[col_names.index("price")],
                         row[col_names.index("year")],
-                        row[col_names.index("millage")],
+                        row[col_names.index("mileage")],
                         row[col_names.index("transmission")],
                         row[col_names.index("seat_capacity")],
-                        row[col_names.index("gambar")],
+                        row[col_names.index("image")],
                         row[col_names.index("last_scraped_at")]
                     ))
 
