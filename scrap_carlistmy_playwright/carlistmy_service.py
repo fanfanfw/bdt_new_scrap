@@ -250,27 +250,39 @@ class CarlistMyService:
                 soup = BeautifulSoup(self.page.content(), "html.parser")
                 # --- Breadcrumb mapping ---
                 spans = soup.select("#listing-detail li > a > span")
-                brand = model_group = model = variant = None
+                brand = model = variant = None
+                model_group = None  
                 
-                # Pastikan model_group hanya diisi jika ada 6 spans
-                if len(spans) == 6:
-                    brand = spans[2].text.strip()
-                    model_group = spans[3].text.strip()  
-                    model = spans[4].text.strip()
-                    variant = spans[5].text.strip()
-                elif len(spans) == 5:
-                    brand = spans[2].text.strip()
-                    model = spans[3].text.strip()
-                    variant = spans[4].text.strip()
-                elif len(spans) == 4:
-                    brand = spans[2].text.strip()
-                    model = spans[3].text.strip()
+                # Filter spans yang tidak kosong
+                valid_spans = [span for span in spans if span.text.strip()]
+                num_spans = len(valid_spans)
+                
+                for i, span in enumerate(valid_spans):
+                    logging.info(f"Span {i}: {span.text.strip()}")
+                logging.info(f"Jumlah spans valid dalam breadcrumb: {num_spans}")
+                
+                relevant_spans = valid_spans[2:] if len(valid_spans) > 2 else []
+                num_relevant = len(relevant_spans)
+                
+                if num_relevant == 2: 
+                    brand = relevant_spans[0].text.strip()
+                    model = relevant_spans[1].text.strip()
+                elif num_relevant == 3:
+                    brand = relevant_spans[0].text.strip()
+                    model = relevant_spans[1].text.strip()
+                    variant = relevant_spans[2].text.strip()
+                elif num_relevant == 4:
+                    brand = relevant_spans[0].text.strip()
+                    model_group = relevant_spans[1].text.strip()
+                    model = relevant_spans[2].text.strip()
+                    variant = relevant_spans[3].text.strip()
                 
                 brand = (brand or "UNKNOWN").upper()
                 model = (model or "UNKNOWN").upper()
                 variant = (variant or "NO VARIANT").upper()
-                # model_group hanya akan terisi jika len(spans) == 6, selain itu akan "NO MODEL_GROUP"
                 model_group = model_group.upper() if model_group else "NO MODEL_GROUP"
+
+                logging.info(f"Hasil mapping: Brand={brand}, Model Group={model_group}, Model={model}, Variant={variant}")
 
                 gallery_imgs = [img.get("src") for img in soup.select("#details-gallery img") if img.get("src")]
                 all_img_urls = set(gallery_imgs) | meta_img_urls
