@@ -23,7 +23,6 @@ DB_TABLE_SCRAP = os.getenv("DB_TABLE_SCRAP_MUDAH", "url")
 DB_TABLE_PRIMARY = os.getenv("DB_TABLE_PRIMARY_MUDAH", "cars")
 DB_TABLE_HISTORY_PRICE = os.getenv("DB_TABLE_HISTORY_PRICE_MUDAH", "price_history_scrap")
 DB_TABLE_HISTORY_PRICE_COMBINED = os.getenv("DB_TABLE_HISTORY_PRICE_COMBINED_MUDAH", "price_history_combined")
-INPUT_FILE = os.getenv("INPUT_FILE_MUDAH", "mudahmy_service_playwright/storage/inputfiles/mudahMY_scraplist.csv")
 MUDAHMY_LISTING_URL = os.getenv("MUDAHMY_LISTING_URL", "https://www.mudah.my/malaysia/cars-for-sale")
 
 
@@ -322,12 +321,12 @@ class MudahMyService:
                     logging.warning(f"Gagal mengambil detail untuk URL: {url}")
                     return None
 
-    def scrape_listings_for_brand(self, base_url, brand_name, model_name, start_page=1):
+    def scrape_listings_for_brand(self, base_url, brand_name, model_name, start_page=1, descending=False):
         total_scraped = 0
         current_page = start_page
         self.init_browser()
         try:
-            while True:
+            while current_page > 0:  # Ubah kondisi untuk mendukung descending
                 if self.stop_flag:
                     logging.info("Stop flag terdeteksi, menghentikan scraping brand ini.")
                     break
@@ -370,9 +369,14 @@ class MudahMyService:
                 time.sleep(3)
                 self.init_browser()
 
-                current_page += 1
+                # Update current_page berdasarkan mode descending
+                if descending:
+                    current_page -= 1
+                else:
+                    current_page += 1
+
                 delay = random.uniform(300, 600)  # 5-10 menit
-                logging.info(f"Menunggu {delay:.1f} detik sebelum halaman berikutnya...")
+                logging.info(f"Menunggu {delay:.1f} detik sebelum halaman {'sebelumnya' if descending else 'berikutnya'}...")
                 time.sleep(delay)
 
             logging.info(f"Selesai scraping {brand_name} {model_name}. Total data: {total_scraped}")
@@ -431,16 +435,20 @@ class MudahMyService:
 
         logging.info("Proses scraping selesai untuk filter brand/model.")
 
-    def scrape_all_from_main(self, start_page=1):
+    def scrape_all_from_main(self, start_page=1, descending=False):
         """
         Scrape semua listing dari halaman utama mudah.my (tanpa filter brand/model, langsung dari ENV MUDAHMY_LISTING_URL)
+        
+        Args:
+            start_page (int): Halaman awal untuk memulai scraping
+            descending (bool): Jika True, scraping dilakukan dari nomor halaman besar ke kecil
         """
         self.reset_scraping()
         self.init_browser()
         try:
             current_page = start_page
             total_scraped = 0
-            while True:
+            while current_page > 0:  # Ubah kondisi untuk mendukung descending
                 if self.stop_flag:
                     logging.info("Stop flag terdeteksi, menghentikan scraping.")
                     break
@@ -479,9 +487,14 @@ class MudahMyService:
                 time.sleep(3)
                 self.init_browser()
 
-                current_page += 1
+                # Update current_page berdasarkan mode descending
+                if descending:
+                    current_page -= 1
+                else:
+                    current_page += 1
+
                 delay = random.uniform(300, 600)  # 5-10 menit
-                logging.info(f"Menunggu {delay:.1f} detik sebelum halaman berikutnya...")
+                logging.info(f"Menunggu {delay:.1f} detik sebelum halaman {'sebelumnya' if descending else 'berikutnya'}...")
                 time.sleep(delay)
 
             logging.info(f"Selesai scraping semua listing dari halaman utama. Total data: {total_scraped}")
