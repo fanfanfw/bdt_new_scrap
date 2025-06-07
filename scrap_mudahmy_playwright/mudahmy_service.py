@@ -160,10 +160,6 @@ class MudahMyService:
                     time.sleep(7)
 
     def scrape_page(self, page, url):
-        """
-        Scrape satu halaman (listing) dan kembalikan daftar URL detail.
-        Jika gagal, kembalikan list kosong.
-        """
         try:
             self.get_current_ip(page)
             delay = random.uniform(5, 10)
@@ -171,7 +167,7 @@ class MudahMyService:
             time.sleep(delay)
             page.goto(url, timeout=60000)
 
-            # Contoh deteksi blocked
+            # Deteksi blokir
             if page.locator("text='Access Denied'").is_visible(timeout=3000):
                 raise Exception("Akses ditolak")
             if page.locator("text='Please verify you are human'").is_visible(timeout=3000):
@@ -180,48 +176,33 @@ class MudahMyService:
 
             page.wait_for_load_state('networkidle', timeout=15000)
 
-            # Coba beberapa selector
-            selectors = [
-                ('css', 'div.flex.flex-col.flex-1.gap-2.self-center div.flex.flex-col a'),
-                ('xpath', '//a[contains(@href,"mudah.my") and contains(@class,"sc-jwKygS")]'),
-                ('xpath', '//div[contains(@class,"listing-item")]//a[contains(@href,"mudah.my")]')
-            ]
-
-            listings = []
-            for strategy, selector in selectors:
-                try:
-                    if strategy == 'css':
-                        elements = page.query_selector_all(selector)
-                    else:
-                        elements = page.query_selector_all(f'{strategy}={selector}')
-                    if elements:
-                        listings = elements
-                        break
-                except Exception as e:
-                    logging.warning(f"Selector {selector} gagal: {e}")
-                    continue
-
-            if not listings:
-                take_screenshot(page, "no_listings_found")
-                logging.warning("Tidak menemukan listing dengan semua selector")
-                return []
+            # Ambil semua card container
+            card_selector = "div[data-testid^='listing-ad-item-']"
+            cards = page.query_selector_all(card_selector)
 
             urls = []
-            for element in listings:
-                href = element.get_attribute('href')
-                if href:
-                    if href.startswith('/'):
-                        href = urljoin(url, href)
-                    if 'mudah.my' in href:
-                        urls.append(href)
+            for card in cards:
+                # Cek apakah ada span 'Today'
+                try:
+                    today_span = card.query_selector("span:has-text('Today')")
+                    if today_span:
+                        # Ambil <a href> dari dalam card
+                        a_tag = card.query_selector("a[href*='mudah.my']")
+                        if a_tag:
+                            href = a_tag.get_attribute('href')
+                            if href:
+                                urls.append(href)
+                except Exception as e:
+                    logging.warning(f"❌ Error memproses card: {e}")
+                    continue
 
-            total_listing = len(list(set(urls)))
-            logging.info(f"📄 Ditemukan {total_listing} listing URLs di halaman {url}.")
+            total_listing = len(set(urls))
+            logging.info(f"📄 Ditemukan {total_listing} listing 'Today' di halaman {url}")
             return list(set(urls))
 
         except Exception as e:
             logging.error(f"Error saat scraping halaman: {e}")
-            take_screenshot(page, f"error_scrape_page")
+            take_screenshot(page, "error_scrape_page")
             return []
 
     def scrape_listing_detail(self, page, url):
@@ -267,12 +248,12 @@ class MudahMyService:
                     "div:has-text('Variant') + div",
                     "//span[contains(text(),'Variant')]/following-sibling::span"
                 ])
-                data["informasi_iklan"] = safe_extract([
+                data["information_ads"] = safe_extract([
                     "#ad_view_ad_highlights > div > div > div:nth-child(1) > div > div > div",
                     "div.ad-highlight:first-child",
                     "//div[contains(@class,'ad-highlight')][1]"
                 ])
-                data["lokasi"] = safe_extract([
+                data["location"] = safe_extract([
                     "#ad_view_ad_highlights > div > div > div.flex.flex-wrap.lg\\:flex-nowrap.gap-3\\.5 > div:nth-child(4) > div",
                     "div:has-text('Location') + div",
                     "//div[contains(text(),'Location')]/following-sibling::div"
@@ -285,7 +266,7 @@ class MudahMyService:
                     "div:has-text('Year') + div",
                     "//div[contains(text(),'Year')]/following-sibling::div"
                 ])
-                data["millage"] = safe_extract([
+                data["mileage"] = safe_extract([
                     "#ad_view_ad_highlights > div > div > div.flex.flex-wrap.lg\\:flex-nowrap.gap-3\\.5 > div:nth-child(3) > div",
                     "div:has-text('Mileage') + div",
                     "//div[contains(text(),'Mileage')]"
@@ -535,6 +516,17 @@ class MudahMyService:
                 if match_year:
                     year_int = int(match_year.group(1))
 
+            # Pisahkan information_ads menjadi condition dan information_ads
+            condition = "N/A"
+            info_ads = car_data.get("information_ads", "")
+            if info_ads:
+                parts = info_ads.split(",", 1)
+                if len(parts) > 1:
+                    condition = parts[0].strip()
+                    info_ads = parts[1].strip()
+                else:
+                    info_ads = parts[0].strip()
+
             if row:
                 car_id, old_price, current_version = row
                 old_price = old_price if old_price else 0
@@ -544,11 +536,11 @@ class MudahMyService:
                 update_query = f"""
                     UPDATE {DB_TABLE_SCRAP}
                     SET brand=%s, model=%s, variant=%s,
-                        informasi_iklan=%s, lokasi=%s,
-                        price=%s, year=%s, millage=%s,
+                        information_ads=%s, location=%s,
+                        price=%s, year=%s, mileage=%s,
                         transmission=%s, seat_capacity=%s,
                         gambar=%s, last_scraped_at=%s,
-                        version=%s
+                        version=%s, condition=%s
                     WHERE id=%s
                 """
 
@@ -557,16 +549,17 @@ class MudahMyService:
                     car_data.get("brand"),
                     car_data.get("model"),
                     car_data.get("variant"),
-                    car_data.get("informasi_iklan"),
-                    car_data.get("lokasi"),
+                    info_ads,
+                    car_data.get("location"),
                     new_price,
                     year_int,
-                    car_data.get("millage"),
+                    car_data.get("mileage"),
                     car_data.get("transmission"),
                     car_data.get("seat_capacity"),
                     car_data.get("gambar"),
                     datetime.now(),
                     new_version,
+                    condition,
                     car_id
                 ))
 
@@ -581,26 +574,27 @@ class MudahMyService:
             else:
                 insert_query = f"""
                     INSERT INTO {DB_TABLE_SCRAP}
-                        (listing_url, brand, model, variant, informasi_iklan, lokasi,
-                         price, year, millage, transmission, seat_capacity, gambar, version)
+                        (listing_url, brand, model, variant, information_ads, location,
+                         price, year, mileage, transmission, seat_capacity, gambar, version, condition)
                     VALUES
                         (%s, %s, %s, %s, %s, %s,
-                         %s, %s, %s, %s, %s, %s, %s)
+                         %s, %s, %s, %s, %s, %s, %s, %s)
                 """
                 self.cursor.execute(insert_query, (
                     car_data["listing_url"],
                     car_data.get("brand"),
                     car_data.get("model"),
                     car_data.get("variant"),
-                    car_data.get("informasi_iklan"),
-                    car_data.get("lokasi"),
+                    info_ads,
+                    car_data.get("location"),
                     price_int,
                     year_int,
-                    car_data.get("millage"),
+                    car_data.get("mileage"),
                     car_data.get("transmission"),
                     car_data.get("seat_capacity"),
                     car_data.get("gambar"),
-                    1
+                    1,
+                    condition
                 ))
 
             self.conn.commit()
@@ -630,49 +624,52 @@ class MudahMyService:
                 if result:
                     update_query = f"""
                         UPDATE {DB_TABLE_PRIMARY}
-                        SET brand=%s, model=%s, variant=%s, informasi_iklan=%s,
-                            lokasi=%s, price=%s, year=%s, millage=%s, transmission=%s,
-                            seat_capacity=%s, gambar=%s, last_scraped_at=%s
+                        SET brand=%s, model=%s, variant=%s, information_ads=%s,
+                            location=%s, price=%s, year=%s, mileage=%s, transmission=%s,
+                            seat_capacity=%s, gambar=%s, last_scraped_at=%s, condition=%s
                         WHERE listing_url=%s
                     """
                     self.cursor.execute(update_query, (
                         row[col_names.index("brand")],
                         row[col_names.index("model")],
                         row[col_names.index("variant")],
-                        row[col_names.index("informasi_iklan")],
-                        row[col_names.index("lokasi")],
+                        row[col_names.index("information_ads")],
+                        row[col_names.index("location")],
                         row[col_names.index("price")],
                         row[col_names.index("year")],
-                        row[col_names.index("millage")],
+                        row[col_names.index("mileage")],
                         row[col_names.index("transmission")],
                         row[col_names.index("seat_capacity")],
                         row[col_names.index("gambar")],
                         row[col_names.index("last_scraped_at")],
+                        row[col_names.index("condition")],
                         listing_url
                     ))
                 else:
                     insert_query = f"""
                         INSERT INTO {DB_TABLE_PRIMARY}
-                            (listing_url, brand, model, variant, informasi_iklan, lokasi,
-                             price, year, millage, transmission, seat_capacity, gambar, last_scraped_at)
+                            (listing_url, brand, model, variant, information_ads, location,
+                             price, year, mileage, transmission, seat_capacity, gambar, 
+                             last_scraped_at, condition)
                         VALUES
                             (%s, %s, %s, %s, %s, %s,
-                             %s, %s, %s, %s, %s, %s, %s)
+                             %s, %s, %s, %s, %s, %s, %s, %s)
                     """
                     self.cursor.execute(insert_query, (
                         listing_url,
                         row[col_names.index("brand")],
                         row[col_names.index("model")],
                         row[col_names.index("variant")],
-                        row[col_names.index("informasi_iklan")],
-                        row[col_names.index("lokasi")],
+                        row[col_names.index("information_ads")],
+                        row[col_names.index("location")],
                         row[col_names.index("price")],
                         row[col_names.index("year")],
-                        row[col_names.index("millage")],
+                        row[col_names.index("mileage")],
                         row[col_names.index("transmission")],
                         row[col_names.index("seat_capacity")],
                         row[col_names.index("gambar")],
-                        row[col_names.index("last_scraped_at")]
+                        row[col_names.index("last_scraped_at")],
+                        row[col_names.index("condition")]
                     ))
 
             # Sinkronisasi perubahan harga dari price_history_scrap ke price_history_combined
