@@ -19,13 +19,12 @@ load_dotenv()
 START_DATE = datetime.now().strftime('%Y%m%d')
 
 # ===== Konfigurasi Env
-DB_TABLE_SCRAP = os.getenv("DB_TABLE_SCRAP", "cars_scrap")
-DB_TABLE_PRIMARY = os.getenv("DB_TABLE_PRIMARY", "cars")
-DB_TABLE_HISTORY_PRICE = os.getenv("DB_TABLE_HISTORY_PRICE", "price_history")
-DB_TABLE_HISTORY_PRICE_COMBINED = os.getenv("DB_TABLE_HISTORY_PRICE_COMBINED", "price_history_combined")
-INPUT_FILE = os.getenv("INPUT_FILE")
+DB_TABLE_SCRAP = os.getenv("DB_TABLE_SCRAP_CARLIST", "cars_scrap_new")
+DB_TABLE_PRIMARY = os.getenv("DB_TABLE_PRIMARY_CARLIST", "cars")
+DB_TABLE_HISTORY_PRICE = os.getenv("DB_TABLE_HISTORY_PRICE_CARLIST", "price_history")
+DB_TABLE_HISTORY_PRICE_COMBINED = os.getenv("DB_TABLE_HISTORY_PRICE_COMBINED_CARLIST", "price_history_combined")
 
-USE_PROXY = os.getenv("USE_PROXY", "false").lower() == "true"
+USE_PROXY = os.getenv("USE_PROXY_OXYLABS", "false").lower() == "true"
 PROXY_SERVER = os.getenv("PROXY_SERVER")
 PROXY_USERNAME = os.getenv("PROXY_USERNAME")
 PROXY_PASSWORD = os.getenv("PROXY_PASSWORD")
@@ -65,7 +64,7 @@ def take_screenshot(page, name: str):
         logging.warning(f"❌ Gagal menyimpan screenshot: {e}")
 
 def get_custom_proxy_list():
-    raw = os.getenv("CUSTOM_PROXIES", "")
+    raw = os.getenv("CUSTOM_PROXIES_CARLIST", "")
     proxies = [p.strip() for p in raw.split(",") if p.strip()]
     parsed = []
     for p in proxies:
@@ -120,7 +119,7 @@ class CarlistMyService:
         self.playwright = sync_playwright().start()
 
         launch_kwargs = {
-            "headless": False,
+            "headless": True,
             "args": [
                 "--disable-blink-features=AutomationControlled",
                 "--no-sandbox",
