@@ -5,12 +5,13 @@ import logging
 import re
 import pandas as pd
 from datetime import datetime
-from urllib.parse import urljoin
+from urllib.parse import urljoin, urlparse
 from dotenv import load_dotenv
 from playwright.sync_api import sync_playwright
 from playwright_stealth import stealth_sync
 from .database import get_connection
 from pathlib import Path
+import requests
 
 load_dotenv()
 
@@ -205,17 +206,161 @@ class MudahMyService:
             take_screenshot(page, "error_scrape_page")
             return []
 
-    def scrape_listing_detail(self, page, url):
-        """Scrape detail listing. Kembalikan dict data, atau None kalau gagal."""
+    def download_image(self, url, file_path):
+        """Download single image to file_path."""
+        try:
+            os.makedirs(os.path.dirname(file_path), exist_ok=True)
+            resp = requests.get(url, timeout=30)
+            if resp.status_code == 200:
+                with open(file_path, "wb") as f:
+                    f.write(resp.content)
+                logging.info(f"Downloaded: {file_path}")
+            else:
+                logging.warning(f"Gagal download: {url} - Status: {resp.status_code}")
+        except Exception as e:
+            logging.error(f"Error download {url}: {str(e)}")
+
+    def download_listing_images(self, listing_url, image_urls):
+        """Download all images for a listing into images/{listing_id}/image_{n}.jpg"""
+        try:
+            path = urlparse(listing_url).path
+            listing_id = path.split("-")[-1].replace(".htm", "")
+            folder_path = os.path.join("images", listing_id)
+            for idx, img_url in enumerate(image_urls):
+                clean_url = img_url.split('?')[0]
+                if not clean_url.startswith('http'):
+                    clean_url = f"https:{clean_url}"
+                file_path = os.path.join(folder_path, f"image_{idx+1}.jpg")
+                self.download_image(clean_url, file_path)
+        except Exception as e:
+            logging.error(f"Error download images for {listing_url}: {str(e)}")
+
+    def scrape_listing_detail(self, context, url):
+        """Scrape detail listing di tab baru. Kembalikan dict data, atau None kalau gagal."""
         max_retries = 3
         attempt = 0
         while attempt < max_retries:
+            page = context.new_page()
             try:
                 logging.info(f"Navigating to detail page: {url} (Attempt {attempt+1})")
-                page.goto(url, wait_until="networkidle", timeout=120000)
+                page.goto(url, wait_until="domcontentloaded", timeout=60000)
 
-                if "Access Denied" in page.title() or "block" in page.url:
-                    raise Exception("Blocked by anti-bot protection")
+                # Tunggu galeri muncul sebelum klik apapun
+                try:
+                    page.wait_for_selector('#ad_view_gallery', timeout=15000)
+                    logging.info("Galeri ditemukan, siap klik tombol Show All/gambar utama.")
+                except Exception as e:
+                    logging.warning(f"Galeri tidak ditemukan dalam 15 detik: {e}")
+                    take_screenshot(page, "gallery_not_found")
+                    page.close()
+                    return None
+
+                # Deteksi blokir/captcha setelah load
+                if (
+                    "Access Denied" in page.title() or
+                    "block" in page.url or
+                    page.locator("text='Access Denied'").count() > 0 or
+                    page.locator("text='verify you are human'").count() > 0
+                ):
+                    logging.warning("Blokir atau captcha terdeteksi di halaman detail!")
+                    take_screenshot(page, "blocked_or_captcha")
+                    page.close()
+                    return None
+
+                show_all_clicked = False
+                try:
+                    # Tunggu dan klik Show All dengan wait_for_selector
+                    show_all_button = page.wait_for_selector(
+                        "#ad_view_gallery a[data-action-step='17']",
+                        timeout=5000
+                    )
+                    if show_all_button:
+                        show_all_button.click()
+                        logging.info("Tombol 'Show All' diklik (metode 1)")
+                        show_all_clicked = True
+                        time.sleep(random.uniform(6, 9)) 
+                except Exception as e:
+                    logging.info(f"Gagal klik tombol 'Show All' metode 1: {e}")
+
+                if not show_all_clicked:
+                    try:
+                        show_all_button = page.query_selector("button:has-text('Show All'), a:has-text('Show All')")
+                        if show_all_button:
+                            show_all_button.scroll_into_view_if_needed()
+                            show_all_button.click()
+                            logging.info("Tombol 'Show All' diklik (metode 2)")
+                            show_all_clicked = True
+                            time.sleep(random.uniform(6, 9)) 
+                    except Exception as e:
+                        logging.info(f"Gagal klik tombol 'Show All' metode 2: {e}")
+
+                if not show_all_clicked:
+                    try:
+                        main_image_div = page.query_selector("#ad_view_gallery div[data-action-step='1']")
+                        if main_image_div:
+                            main_image_div.click()
+                            logging.info("Gambar utama galeri diklik (metode 3)")
+                            time.sleep(random.uniform(6, 9)) 
+                    except Exception as e:
+                        logging.info(f"Tidak bisa klik gambar utama sebagai fallback: {e}")
+
+                # Scroll ke galeri dan tunggu konten muncul
+                try:
+                    for _ in range(3):
+                        page.mouse.wheel(0, random.randint(500, 1000))
+                        time.sleep(1)
+
+                    # Coba beberapa selector yang mungkin untuk galeri gambar
+                    gallery_selectors = [
+                        "#tabpanel-0",
+                        "#ad_view_gallery div[role='tabpanel']",
+                        "#ad_view_gallery div.gallery",
+                        "div[data-index]"
+                    ]
+                    
+                    gallery_found = False
+                    for selector in gallery_selectors:
+                        try:
+                            page.wait_for_selector(selector, timeout=5000)
+                            logging.info(f"Gallery terdeteksi dengan selector: {selector}")
+                            gallery_found = True
+                            break
+                        except Exception:
+                            continue
+
+                    if not gallery_found:
+                        raise Exception("Tidak ada selector galeri yang cocok")
+
+                    time.sleep(3)
+
+                    # Ambil semua gambar dengan mencari div[data-index]
+                    image_urls = set()
+                    image_divs = page.query_selector_all("div[data-index]")
+                    logging.info(f"Ditemukan {len(image_divs)} div dengan data-index")
+
+                    for div in image_divs:
+                        try:
+                            img = div.query_selector("img")
+                            if img:
+                                src = img.get_attribute("src")
+                                if src and src.startswith(('http', '//')):
+                                    clean_url = src.split('?')[0]
+                                    if not clean_url.startswith('http'):
+                                        clean_url = f"https:{clean_url}"
+                                    image_urls.add(clean_url)
+                        except Exception as e:
+                            continue
+
+                    if not image_urls:
+                        raise Exception("Tidak ada gambar yang ditemukan di galeri")
+
+                    logging.info(f"Total {len(image_urls)} gambar unik ditemukan")
+
+                except Exception as e:
+                    logging.warning(f"Gallery tidak dapat diproses: {e}")
+                    take_screenshot(page, "gallery_not_found")
+                    page.close()
+                    return None
 
                 def safe_extract(selectors, selector_type="css", fallback="N/A"):
                     for selector in selectors:
@@ -281,20 +426,23 @@ class MudahMyService:
                     "div:has-text('Seat Capacity') + div",
                     "//div[contains(text(),'Seat') and contains(text(),'Capacity')]"
                 ])
-                images = page.evaluate("""() => {
-                    const gallery = document.getElementById('ad_view_gallery');
-                    if (!gallery) return [];
-                    return Array.from(gallery.querySelectorAll('img')).map(img => img.src);
-                }""")
-                data["gambar"] = images
+                
+                # Gunakan image_urls yang sudah berisi semua gambar
+                data["gambar"] = list(image_urls)
                 data["scraped_at"] = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
 
+                # Tambahan: download gambar
+                if image_urls:  # Gunakan image_urls langsung
+                    self.download_listing_images(url, image_urls)
+
+                page.close()
                 return data
 
             except Exception as e:
                 logging.error(f"Scraping detail failed: {e}")
                 take_screenshot(page, f"error_scrape_detail")
                 attempt += 1
+                page.close()
                 if attempt < max_retries:
                     logging.warning(f"Mencoba ulang detail scraping untuk {url} (Attempt {attempt+1})...")
                     time.sleep(random.uniform(15, 20))
@@ -324,7 +472,8 @@ class MudahMyService:
                     if self.stop_flag:
                         break
 
-                    detail_data = self.scrape_listing_detail(self.page, url)
+                    # Ganti: kirim self.context, bukan self.page
+                    detail_data = self.scrape_listing_detail(self.context, url)
                     if detail_data:
                         max_db_retries = 3
                         for attempt in range(1, max_db_retries + 1):
@@ -445,7 +594,7 @@ class MudahMyService:
                 for url in listing_urls:
                     if self.stop_flag:
                         break
-                    detail_data = self.scrape_listing_detail(self.page, url)
+                    detail_data = self.scrape_listing_detail(self.context, url)
                     if detail_data:
                         max_db_retries = 3
                         for attempt in range(1, max_db_retries + 1):
