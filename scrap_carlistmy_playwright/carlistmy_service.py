@@ -354,7 +354,7 @@ class CarlistMyService:
         """
         Download semua gambar ke folder images/brand/model/variant/id/
         """
-        base_dir = Path("images") / str(brand).replace("/", "_") / str(model).replace("/", "_") / str(variant).replace("/", "_") / str(car_id)
+        base_dir = Path("images_carlist") / str(brand).replace("/", "_") / str(model).replace("/", "_") / str(variant).replace("/", "_") / str(car_id)
         base_dir.mkdir(parents=True, exist_ok=True)
         local_paths = []
         for idx, url in enumerate(image_urls):
