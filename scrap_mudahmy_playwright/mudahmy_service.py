@@ -90,6 +90,7 @@ class MudahMyService:
         self.stop_flag = False
         self.batch_size = 40
         self.listing_count = 0
+        self.last_scraped_data = {} 
 
         self.conn = get_connection()
         self.cursor = self.conn.cursor()
@@ -187,7 +188,6 @@ class MudahMyService:
                 try:
                     today_span = card.query_selector("span:has-text('Today')")
                     if today_span:
-                        # Ambil <a href> dari dalam card
                         a_tag = card.query_selector("a[href*='mudah.my']")
                         if a_tag:
                             href = a_tag.get_attribute('href')
@@ -220,20 +220,32 @@ class MudahMyService:
         except Exception as e:
             logging.error(f"Error download {url}: {str(e)}")
 
-    def download_listing_images(self, listing_url, image_urls):
-        """Download all images for a listing into images/{listing_id}/image_{n}.jpg"""
+    def download_listing_images(self, listing_url, image_urls, car_id):
+        """Download all images for a listing into images_mudah/brand/model/variant/db_id/image_{n}.jpg"""
         try:
-            path = urlparse(listing_url).path
-            listing_id = path.split("-")[-1].replace(".htm", "")
-            folder_path = os.path.join("images", listing_id)
+            # Clean brand, model and variant names untuk nama folder yang aman
+            def clean_filename(name):
+                # Hapus karakter yang tidak diinginkan, ganti dengan underscore
+                return re.sub(r'[<>:"/\\|?*]', '_', str(name).strip())
+            
+            brand = clean_filename(self.last_scraped_data.get("brand", "unknown"))
+            model = clean_filename(self.last_scraped_data.get("model", "unknown"))
+            variant = clean_filename(self.last_scraped_data.get("variant", "unknown"))
+            
+            folder_path = os.path.join("images_mudah", brand, model, variant, str(car_id))
+            os.makedirs(folder_path, exist_ok=True)
+            
+            # Download setiap gambar
             for idx, img_url in enumerate(image_urls):
                 clean_url = img_url.split('?')[0]
                 if not clean_url.startswith('http'):
                     clean_url = f"https:{clean_url}"
                 file_path = os.path.join(folder_path, f"image_{idx+1}.jpg")
                 self.download_image(clean_url, file_path)
+                
+            logging.info(f"Gambar disimpan di folder: {folder_path}")
         except Exception as e:
-            logging.error(f"Error download images for {listing_url}: {str(e)}")
+            logging.error(f"Error download images for listing ID {car_id}: {str(e)}")
 
     def scrape_listing_detail(self, context, url):
         """Scrape detail listing di tab baru. Kembalikan dict data, atau None kalau gagal."""
@@ -245,7 +257,6 @@ class MudahMyService:
                 logging.info(f"Navigating to detail page: {url} (Attempt {attempt+1})")
                 page.goto(url, wait_until="domcontentloaded", timeout=60000)
 
-                # Tunggu galeri muncul sebelum klik apapun
                 try:
                     page.wait_for_selector('#ad_view_gallery', timeout=15000)
                     logging.info("Galeri ditemukan, siap klik tombol Show All/gambar utama.")
@@ -269,7 +280,6 @@ class MudahMyService:
 
                 show_all_clicked = False
                 try:
-                    # Tunggu dan klik Show All dengan wait_for_selector
                     show_all_button = page.wait_for_selector(
                         "#ad_view_gallery a[data-action-step='17']",
                         timeout=5000
@@ -304,7 +314,6 @@ class MudahMyService:
                     except Exception as e:
                         logging.info(f"Tidak bisa klik gambar utama sebagai fallback: {e}")
 
-                # Scroll ke galeri dan tunggu konten muncul
                 try:
                     for _ in range(3):
                         page.mouse.wheel(0, random.randint(500, 1000))
@@ -431,9 +440,16 @@ class MudahMyService:
                 data["gambar"] = list(image_urls)
                 data["scraped_at"] = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
 
-                # Tambahan: download gambar
-                if image_urls:  # Gunakan image_urls langsung
-                    self.download_listing_images(url, image_urls)
+                # Simpan data terakhir untuk digunakan saat download gambar
+                self.last_scraped_data = data
+
+                # Download gambar setelah simpan ke database untuk dapat ID
+                if image_urls:
+                    success, car_id = self.save_to_db(data)
+                    if success and car_id:
+                        self.download_listing_images(url, image_urls, car_id)
+                    else:
+                        logging.error("Gagal menyimpan data ke database, gambar tidak didownload")
 
                 page.close()
                 return data
@@ -644,6 +660,8 @@ class MudahMyService:
     def save_to_db(self, car_data):
         """
         Simpan atau update data mobil ke database.
+        Returns:
+            tuple: (success, car_id) - success adalah boolean, car_id adalah ID di database
         """
         try:
             self.cursor.execute(
@@ -728,6 +746,7 @@ class MudahMyService:
                     VALUES
                         (%s, %s, %s, %s, %s, %s,
                          %s, %s, %s, %s, %s, %s, %s, %s)
+                    RETURNING id
                 """
                 self.cursor.execute(insert_query, (
                     car_data["listing_url"],
@@ -745,12 +764,16 @@ class MudahMyService:
                     1,
                     condition
                 ))
+                car_id = self.cursor.fetchone()[0]
 
             self.conn.commit()
-            logging.info(f"✅ Data untuk listing_url={car_data['listing_url']} berhasil disimpan/diupdate.")
+            logging.info(f"✅ Data untuk listing_url={car_data['listing_url']} berhasil disimpan/diupdate dengan ID: {car_id}")
+            return True, car_id
+
         except Exception as e:
             self.conn.rollback()
             logging.error(f"❌ Error menyimpan atau memperbarui data ke database: {e}")
+            return False, None
 
     def sync_to_cars(self):
         """
