@@ -163,28 +163,25 @@ class MudahMyService:
 
     def scrape_page(self, page, url):
         try:
-            self.get_current_ip(page)
             delay = random.uniform(5, 10)
             logging.info(f"Menuju {url} (delay {delay:.1f}s)")
             time.sleep(delay)
             page.goto(url, timeout=60000)
 
-            # Deteksi blokir
+            # Check for blocks
             if page.locator("text='Access Denied'").is_visible(timeout=3000):
                 raise Exception("Akses ditolak")
             if page.locator("text='Please verify you are human'").is_visible(timeout=3000):
-                take_screenshot(page, "captcha_detected")
                 raise Exception("Deteksi CAPTCHA")
 
             page.wait_for_load_state('networkidle', timeout=15000)
 
-            # Ambil semua card container
+            # Get all card containers
             card_selector = "div[data-testid^='listing-ad-item-']"
             cards = page.query_selector_all(card_selector)
 
             urls = []
             for card in cards:
-                # Cek apakah ada span 'Today'
                 try:
                     today_span = card.query_selector("span:has-text('Today')")
                     if today_span:
@@ -203,7 +200,6 @@ class MudahMyService:
 
         except Exception as e:
             logging.error(f"Error saat scraping halaman: {e}")
-            take_screenshot(page, "error_scrape_page")
             return []
 
     def download_image(self, url, file_path):
@@ -256,17 +252,8 @@ class MudahMyService:
             try:
                 logging.info(f"Navigating to detail page: {url} (Attempt {attempt+1})")
                 page.goto(url, wait_until="domcontentloaded", timeout=60000)
-
-                try:
-                    page.wait_for_selector('#ad_view_gallery', timeout=15000)
-                    logging.info("Galeri ditemukan, siap klik tombol Show All/gambar utama.")
-                except Exception as e:
-                    logging.warning(f"Galeri tidak ditemukan dalam 15 detik: {e}")
-                    take_screenshot(page, "gallery_not_found")
-                    page.close()
-                    return None
-
-                # Deteksi blokir/captcha setelah load
+                
+                # Check for blocks/captcha
                 if (
                     "Access Denied" in page.title() or
                     "block" in page.url or
@@ -274,75 +261,215 @@ class MudahMyService:
                     page.locator("text='verify you are human'").count() > 0
                 ):
                     logging.warning("Blokir atau captcha terdeteksi di halaman detail!")
-                    take_screenshot(page, "blocked_or_captcha")
+                    attempt += 1
                     page.close()
                     return None
 
-                show_all_clicked = False
                 try:
-                    show_all_button = page.wait_for_selector(
-                        "#ad_view_gallery a[data-action-step='17']",
-                        timeout=5000
-                    )
-                    if show_all_button:
-                        show_all_button.click()
-                        logging.info("Tombol 'Show All' diklik (metode 1)")
-                        show_all_clicked = True
-                        time.sleep(random.uniform(6, 9)) 
+                    page.wait_for_selector('#ad_view_car_specifications', timeout=15000)
+                    time.sleep(3)  # Wait for animations
                 except Exception as e:
-                    logging.info(f"Gagal klik tombol 'Show All' metode 1: {e}")
+                    logging.warning(f"Specifications section tidak ditemukan: {e}")
+                    attempt += 1
+                    page.close()
+                    continue
 
-                if not show_all_clicked:
-                    try:
-                        show_all_button = page.query_selector("button:has-text('Show All'), a:has-text('Show All')")
-                        if show_all_button:
-                            show_all_button.scroll_into_view_if_needed()
-                            show_all_button.click()
-                            logging.info("Tombol 'Show All' diklik (metode 2)")
-                            show_all_clicked = True
-                            time.sleep(random.uniform(6, 9)) 
-                    except Exception as e:
-                        logging.info(f"Gagal klik tombol 'Show All' metode 2: {e}")
+                show_more_clicked = False
+                
+                try:
+                    show_more_btn = page.wait_for_selector(
+                        "#ad_view_car_specifications button:has-text('SHOW MORE')", 
+                        timeout=5000,
+                        state="visible"
+                    )
+                    if show_more_btn:
+                        show_more_btn.scroll_into_view_if_needed()
+                        show_more_btn.click()
+                        time.sleep(3)  
+                        
+                        # Verify if button changed to SHOW LESS
+                        if page.locator("button:has-text('SHOW LESS')").count() > 0:
+                            show_more_clicked = True
+                            logging.info("Tombol 'SHOW MORE' specifications diklik (metode 1)")
+                            time.sleep(2)
+                except Exception as e:
+                    logging.info("Metode 1 gagal: mencoba metode berikutnya")
 
-                if not show_all_clicked:
+                if not show_more_clicked:
                     try:
-                        main_image_div = page.query_selector("#ad_view_gallery div[data-action-step='1']")
-                        if main_image_div:
-                            main_image_div.click()
-                            logging.info("Gambar utama galeri diklik (metode 3)")
-                            time.sleep(random.uniform(6, 9)) 
+                        page.evaluate("""
+                            const btn = document.querySelector('#ad_view_car_specifications button');
+                            if (btn && btn.innerText.includes('SHOW MORE')) {
+                                btn.click();
+                            }
+                        """)
+                        time.sleep(3)
+                        if page.locator("button:has-text('SHOW LESS')").count() > 0:
+                            show_more_clicked = True
+                            logging.info("Tombol 'SHOW MORE' specifications diklik via JavaScript")
                     except Exception as e:
-                        logging.info(f"Tidak bisa klik gambar utama sebagai fallback: {e}")
+                        logging.info("Metode 2 gagal: mencoba metode final")
+
+                if not show_more_clicked:
+                    try:
+                        page.evaluate("""
+                            const specDiv = document.querySelector('#ad_view_car_specifications');
+                            if (btn && btn.innerText.includes('SHOW MORE')) {
+                                btn.click();
+                            }
+                        """)
+                        time.sleep(3)
+                        if page.locator("button:has-text('SHOW LESS')").count() > 0:
+                            show_more_clicked = True
+                            logging.info("Tombol 'SHOW MORE' specifications diklik via JavaScript")
+                    except Exception as e:
+                        logging.info("Metode 2 gagal: mencoba metode final")
+
+                if not show_more_clicked:
+                    try:
+                        page.evaluate("""
+                            const specDiv = document.querySelector('#ad_view_car_specifications');
+                            if (specDiv) {
+                                const btn = specDiv.querySelector('button');
+                                if (btn) {
+                                    btn.setAttribute('data-expanded', 'true');
+                                    btn.innerHTML = 'SHOW LESS<svg viewBox="0 0 24 24" style="width:1.25rem;height:1.25rem" role="presentation"><path d="M7.41,15.41L12,10.83L16.59,15.41L18,14L12,8L6,14L7.41,15.41Z" style="fill:currentColor"></path></svg>';
+                                }
+                                const contentDivs = specDiv.querySelectorAll('div[style*="display: none"]');
+                                contentDivs.forEach(div => div.style.display = 'block');
+                            }
+                        """)
+                        show_more_clicked = True
+                        logging.info("Specifications diperluas via DOM manipulation")
+                    except Exception as e:
+                        logging.info("Semua metode gagal expand specifications")
+
+                def safe_extract(selectors, selector_type="css", fallback="N/A"):
+                    for selector in selectors:
+                        try:
+                            if selector_type == "css":
+                                if page.locator(selector).count() > 0:
+                                    return page.locator(selector).first.inner_text().strip()
+                            elif selector_type == "xpath":
+                                xp = f"xpath={selector}"
+                                if page.locator(xp).count() > 0:
+                                    return page.locator(xp).first.inner_text().strip()
+                        except Exception as e:
+                            continue
+                    return fallback
+
+                data = {}
+                data["listing_url"] = url
+                data["brand"] = safe_extract([
+                    "#ad_view_car_specifications div:nth-child(1) > div:nth-child(3)",
+                    "div:has-text('Brand') + div",
+                ])
+                data["model"] = safe_extract([
+                    "#ad_view_car_specifications div:nth-child(2) > div:nth-child(3)",
+                    "div:has-text('Model') + div",
+                ])
+                data["variant"] = safe_extract([
+                    "#ad_view_car_specifications div:nth-child(4) > div:nth-child(3)",
+                    "div:has-text('Variant') + div",
+                ])
+                data["engine_cc"] = safe_extract([
+                    "#ad_view_car_specifications > div > div > div:nth-child(2) > div > div > div:nth-child(1) > div:nth-child(1) > div:nth-child(2)",
+                    "div:has-text('Engine CC') + div",
+                ])
+                data["information_ads"] = safe_extract([
+                    "#ad_view_ad_highlights > div > div > div:nth-child(1) > div > div > div",
+                    "div.ad-highlight:first-child",
+                ])
+                data["location"] = safe_extract([
+                    "#ad_view_ad_highlights > div > div > div.flex.flex-wrap.lg\\:flex-nowrap.gap-3\\.5 > div:nth-child(4) > div",
+                    "div:has-text('Location') + div",
+                ])
+                data["price"] = safe_extract([
+                    "div.flex.gap-1.md\\:items-end > div"
+                ])
+                data["year"] = safe_extract([
+                    "#ad_view_car_specifications div:nth-child(3) > div:nth-child(3)",
+                    "div:has-text('Year') + div",
+                ])
+                data["mileage"] = safe_extract([
+                    "#ad_view_ad_highlights > div > div > div.flex.flex-wrap.lg\\:flex-nowrap.gap-3\\.5 > div:nth-child(3) > div",
+                    "div:has-text('Mileage') + div",
+                ])
+                data["transmission"] = safe_extract([
+                    "#ad_view_ad_highlights > div > div > div.flex.flex-wrap.lg\\:flex-nowrap.gap-3\\.5 > div:nth-child(2) > div",
+                    "div:has-text('Transmission') + div",
+                ])
+                data["seat_capacity"] = safe_extract([
+                    "#ad_view_car_specifications > div > div > div > div > div > div:nth-child(2) > div:nth-child(3) > div:nth-child(3)",
+                    "div:has-text('Seat Capacity') + div",
+                ])
+                data["series"] = safe_extract([
+                    "#ad_view_car_specifications div.flex.flex-col.gap-4 div:has-text('Series') + div",
+                    "div:has-text('Series') + div",
+                ])
+                data["type"] = safe_extract([
+                    "#ad_view_car_specifications div.flex.flex-col.gap-4 div:has-text('Type') + div",
+                    "div:has-text('Type') + div",
+                ])
+                data["fuel_type"] = safe_extract([
+                    "#ad_view_car_specifications > div > div > div:nth-child(1) > div > div > div:nth-child(2) > div:nth-child(4) > div:nth-child(3)",
+                    "#ad_view_car_specifications div.flex.flex-col.gap-4 div:has-text('Fuel Type') + div",
+                    "div:has-text('Fuel Type') + div",
+                ])
+
+                data["scraped_at"] = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+
+                # Simpan ke last_scraped_data untuk digunakan saat download gambar
+                self.last_scraped_data = data
+
+                success, car_id = self.save_to_db(data)
+                if not success:
+                    logging.error("Gagal menyimpan data ke database")
+                    page.close()
+                    return None
 
                 try:
-                    for _ in range(3):
-                        page.mouse.wheel(0, random.randint(500, 1000))
-                        time.sleep(1)
+                    page.wait_for_selector('#ad_view_gallery', timeout=15000)
+                    logging.info("Galeri ditemukan, siap proses gambar")
 
-                    # Coba beberapa selector yang mungkin untuk galeri gambar
-                    gallery_selectors = [
-                        "#tabpanel-0",
-                        "#ad_view_gallery div[role='tabpanel']",
-                        "#ad_view_gallery div.gallery",
-                        "div[data-index]"
-                    ]
-                    
-                    gallery_found = False
-                    for selector in gallery_selectors:
+                    # Proses Show All gallery
+                    show_all_clicked = False
+                    try:
+                        show_all_button = page.wait_for_selector(
+                            "#ad_view_gallery a[data-action-step='17']",
+                            timeout=5000
+                        )
+                        if show_all_button:
+                            show_all_button.click()
+                            logging.info("Tombol 'Show All' gallery diklik (metode 1)")
+                            show_all_clicked = True
+                            time.sleep(random.uniform(6, 9))
+                    except Exception as e:
+                        logging.info(f"Gagal klik tombol 'Show All' gallery metode 1: {e}")
+
+                    if not show_all_clicked:
                         try:
-                            page.wait_for_selector(selector, timeout=5000)
-                            logging.info(f"Gallery terdeteksi dengan selector: {selector}")
-                            gallery_found = True
-                            break
-                        except Exception:
-                            continue
+                            show_all_button = page.query_selector("button:has-text('Show All'), a:has-text('Show All')")
+                            if show_all_button:
+                                show_all_button.scroll_into_view_if_needed()
+                                show_all_button.click()
+                                logging.info("Tombol 'Show All' gallery diklik (metode 2)")
+                                show_all_clicked = True
+                                time.sleep(random.uniform(6, 9))
+                        except Exception as e:
+                            logging.info(f"Gagal klik tombol 'Show All' gallery metode 2: {e}")
 
-                    if not gallery_found:
-                        raise Exception("Tidak ada selector galeri yang cocok")
+                    if not show_all_clicked:
+                        try:
+                            main_image_div = page.query_selector("#ad_view_gallery div[data-action-step='1']")
+                            if main_image_div:
+                                main_image_div.click()
+                                logging.info("Gambar utama galeri diklik (metode 3)")
+                                time.sleep(random.uniform(6, 9))
+                        except Exception as e:
+                            logging.info(f"Tidak bisa klik gambar utama sebagai fallback: {e}")
 
-                    time.sleep(3)
-
-                    # Ambil semua gambar dengan mencari div[data-index]
+                    # Proses ambil URL gambar
                     image_urls = set()
                     image_divs = page.query_selector_all("div[data-index]")
                     logging.info(f"Ditemukan {len(image_divs)} div dengan data-index")
@@ -357,106 +484,25 @@ class MudahMyService:
                                     if not clean_url.startswith('http'):
                                         clean_url = f"https:{clean_url}"
                                     image_urls.add(clean_url)
-                        except Exception as e:
+                        except Exception:
                             continue
 
-                    if not image_urls:
-                        raise Exception("Tidak ada gambar yang ditemukan di galeri")
-
-                    logging.info(f"Total {len(image_urls)} gambar unik ditemukan")
-
-                except Exception as e:
-                    logging.warning(f"Gallery tidak dapat diproses: {e}")
-                    take_screenshot(page, "gallery_not_found")
-                    page.close()
-                    return None
-
-                def safe_extract(selectors, selector_type="css", fallback="N/A"):
-                    for selector in selectors:
-                        try:
-                            if selector_type == "css":
-                                if page.locator(selector).count() > 0:
-                                    return page.locator(selector).first.inner_text().strip()
-                            elif selector_type == "xpath":
-                                xp = f"xpath={selector}"
-                                if page.locator(xp).count() > 0:
-                                    return page.locator(xp).first.inner_text().strip()
-                        except Exception as e:
-                            logging.warning(f"Selector failed: {selector} - {e}")
-                    return fallback
-
-                data = {}
-                data["listing_url"] = url
-                data["brand"] = safe_extract([
-                    "#ad_view_car_specifications div:nth-child(1) > div:nth-child(3)",
-                    "div:has-text('Brand') + div",
-                    "//div[contains(text(),'Brand')]/following-sibling::div"
-                ])
-                data["model"] = safe_extract([
-                    "#ad_view_car_specifications div:nth-child(2) > div:nth-child(3)",
-                    "div:has-text('Model') + div",
-                    "//div[contains(text(),'Model')]/following-sibling::div"
-                ])
-                data["variant"] = safe_extract([
-                    "#ad_view_car_specifications div:nth-child(4) > div:nth-child(3)",
-                    "div:has-text('Variant') + div",
-                    "//span[contains(text(),'Variant')]/following-sibling::span"
-                ])
-                data["information_ads"] = safe_extract([
-                    "#ad_view_ad_highlights > div > div > div:nth-child(1) > div > div > div",
-                    "div.ad-highlight:first-child",
-                    "//div[contains(@class,'ad-highlight')][1]"
-                ])
-                data["location"] = safe_extract([
-                    "#ad_view_ad_highlights > div > div > div.flex.flex-wrap.lg\\:flex-nowrap.gap-3\\.5 > div:nth-child(4) > div",
-                    "div:has-text('Location') + div",
-                    "//div[contains(text(),'Location')]/following-sibling::div"
-                ])
-                data["price"] = safe_extract([
-                    "div.flex.gap-1.md\\:items-end > div"
-                ])
-                data["year"] = safe_extract([
-                    "#ad_view_car_specifications div:nth-child(3) > div:nth-child(3)",
-                    "div:has-text('Year') + div",
-                    "//div[contains(text(),'Year')]/following-sibling::div"
-                ])
-                data["mileage"] = safe_extract([
-                    "#ad_view_ad_highlights > div > div > div.flex.flex-wrap.lg\\:flex-nowrap.gap-3\\.5 > div:nth-child(3) > div",
-                    "div:has-text('Mileage') + div",
-                    "//div[contains(text(),'Mileage')]"
-                ])
-                data["transmission"] = safe_extract([
-                    "#ad_view_ad_highlights > div > div > div.flex.flex-wrap.lg\\:flex-nowrap.gap-3\\.5 > div:nth-child(2) > div",
-                    "div:has-text('Transmission') + div",
-                    "//div[contains(text(),'Transmission')]"
-                ])
-                data["seat_capacity"] = safe_extract([
-                    "#ad_view_car_specifications > div > div > div > div > div > div:nth-child(2) > div:nth-child(3) > div:nth-child(3)",
-                    "div:has-text('Seat Capacity') + div",
-                    "//div[contains(text(),'Seat') and contains(text(),'Capacity')]"
-                ])
-                
-                # Gunakan image_urls yang sudah berisi semua gambar
-                data["gambar"] = list(image_urls)
-                data["scraped_at"] = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
-
-                # Simpan data terakhir untuk digunakan saat download gambar
-                self.last_scraped_data = data
-
-                # Download gambar setelah simpan ke database untuk dapat ID
-                if image_urls:
-                    success, car_id = self.save_to_db(data)
-                    if success and car_id:
+                    if image_urls:
+                        # Update data dengan URL gambar dan download
+                        data["gambar"] = list(image_urls)
                         self.download_listing_images(url, image_urls, car_id)
                     else:
-                        logging.error("Gagal menyimpan data ke database, gambar tidak didownload")
+                        logging.warning(f"Tidak ada gambar ditemukan untuk listing {url}")
+
+                except Exception as e:
+                    logging.warning(f"Gagal memproses galeri: {e}")
+                    take_screenshot(page, "gallery_error")
 
                 page.close()
                 return data
 
             except Exception as e:
                 logging.error(f"Scraping detail failed: {e}")
-                take_screenshot(page, f"error_scrape_detail")
                 attempt += 1
                 page.close()
                 if attempt < max_retries:
@@ -706,8 +752,9 @@ class MudahMyService:
                         information_ads=%s, location=%s,
                         price=%s, year=%s, mileage=%s,
                         transmission=%s, seat_capacity=%s,
-                        gambar=%s, last_scraped_at=%s,
-                        version=%s, condition=%s
+                        last_scraped_at=%s,
+                        version=%s, condition=%s, engine_cc=%s,
+                        fuel_type=%s
                     WHERE id=%s
                 """
 
@@ -723,10 +770,11 @@ class MudahMyService:
                     car_data.get("mileage"),
                     car_data.get("transmission"),
                     car_data.get("seat_capacity"),
-                    car_data.get("gambar"),
                     datetime.now(),
                     new_version,
                     condition,
+                    car_data.get("engine_cc"),
+                    car_data.get("fuel_type"),
                     car_id
                 ))
 
@@ -742,10 +790,11 @@ class MudahMyService:
                 insert_query = f"""
                     INSERT INTO {DB_TABLE_SCRAP}
                         (listing_url, brand, model, variant, information_ads, location,
-                         price, year, mileage, transmission, seat_capacity, gambar, version, condition)
+                         price, year, mileage, transmission, seat_capacity,
+                         version, condition, engine_cc, fuel_type)
                     VALUES
                         (%s, %s, %s, %s, %s, %s,
-                         %s, %s, %s, %s, %s, %s, %s, %s)
+                         %s, %s, %s, %s, %s, %s, %s, %s, %s)
                     RETURNING id
                 """
                 self.cursor.execute(insert_query, (
@@ -760,9 +809,10 @@ class MudahMyService:
                     car_data.get("mileage"),
                     car_data.get("transmission"),
                     car_data.get("seat_capacity"),
-                    car_data.get("gambar"),
                     1,
-                    condition
+                    condition,
+                    car_data.get("engine_cc"),
+                    car_data.get("fuel_type")
                 ))
                 car_id = self.cursor.fetchone()[0]
 
