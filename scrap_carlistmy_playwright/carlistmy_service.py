@@ -5,6 +5,7 @@ import time
 import logging
 import pandas as pd
 import requests
+import json
 from datetime import datetime
 from bs4 import BeautifulSoup
 from dotenv import load_dotenv
@@ -119,7 +120,7 @@ class CarlistMyService:
         self.playwright = sync_playwright().start()
 
         launch_kwargs = {
-            "headless": True,
+            "headless": False,
             "args": [
                 "--disable-blink-features=AutomationControlled",
                 "--no-sandbox",
@@ -377,7 +378,7 @@ class CarlistMyService:
             row = self.cursor.fetchone()
             now = datetime.now()
             image_urls = car.get("image") or []
-            # Pastikan uppercase dan default value sebelum masuk DB
+            image_urls_str = json.dumps(image_urls)
             brand = (car.get("brand") or "unknown").upper()
             model_group = (car.get("model_group") or "NO MODEL_GROUP").upper()
             model = (car.get("model") or "unknown").upper()
@@ -399,26 +400,26 @@ class CarlistMyService:
                     SET brand=%s, model_group=%s, model=%s, variant=%s, information_ads=%s,
                         location=%s, condition=%s, price=%s, year=%s, mileage=%s,
                         transmission=%s, seat_capacity=%s, engine_cc=%s, fuel_type=%s,
-                        last_scraped_at=%s, version=%s
+                        last_scraped_at=%s, version=%s, images=%s
                     WHERE id=%s
                 """, (
                     brand, model_group, model, variant, car.get("information_ads"),
                     car.get("location"), car.get("condition"),car.get("price"), car.get("year"), car.get("mileage"),
                     car.get("transmission"), car.get("seat_capacity"), car.get("engine_cc"), car.get("fuel_type"),
-                    now, version + 1, car_id
+                    now, version + 1, image_urls_str, car_id
                 ))
             else:
                 self.cursor.execute(f"""
                     INSERT INTO {DB_TABLE_SCRAP} (
                         listing_url, brand, model_group, model, variant, information_ads, location, condition,
-                        price, year, mileage, transmission, seat_capacity, engine_cc, fuel_type, version
-                    ) VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
+                        price, year, mileage, transmission, seat_capacity, engine_cc, fuel_type, version, images
+                    ) VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
                     RETURNING id
                 """, (
                     car["listing_url"], brand, model_group, model, variant,
                     car.get("information_ads"), car.get("location"), car.get("condition"),car.get("price"),
                     car.get("year"), car.get("mileage"), car.get("transmission"),
-                    car.get("seat_capacity"), car.get("engine_cc"), car.get("fuel_type"), 1
+                    car.get("seat_capacity"), car.get("engine_cc"), car.get("fuel_type"), 1, image_urls_str
                 ))
                 car_id = self.cursor.fetchone()[0]
                 self.download_images(image_urls, brand, model, variant, car_id)

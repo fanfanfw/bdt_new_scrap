@@ -12,6 +12,7 @@ from playwright_stealth import stealth_sync
 from .database import get_connection
 from pathlib import Path
 import requests
+import json
 
 load_dotenv()
 
@@ -101,7 +102,7 @@ class MudahMyService:
     def init_browser(self):
         self.playwright = sync_playwright().start()
         launch_kwargs = {
-            "headless": True,
+            "headless": False,
             "args": [
                 "--disable-blink-features=AutomationControlled",
                 "--no-sandbox",
@@ -287,7 +288,6 @@ class MudahMyService:
                         show_more_btn.click()
                         time.sleep(3)  
                         
-                        # Verify if button changed to SHOW LESS
                         if page.locator("button:has-text('SHOW LESS')").count() > 0:
                             show_more_clicked = True
                             logging.info("Tombol 'SHOW MORE' specifications diklik (metode 1)")
@@ -355,7 +355,7 @@ class MudahMyService:
                                 if page.locator(xp).count() > 0:
                                     return page.locator(xp).first.inner_text().strip()
                         except Exception as e:
-                            continue
+                            logging.error(f"Error extracting selector: {e}")
                     return fallback
 
                 data = {}
@@ -704,11 +704,6 @@ class MudahMyService:
         logging.info("Scraping direset.")
 
     def save_to_db(self, car_data):
-        """
-        Simpan atau update data mobil ke database.
-        Returns:
-            tuple: (success, car_id) - success adalah boolean, car_id adalah ID di database
-        """
         try:
             self.cursor.execute(
                 f"SELECT id, price, version FROM {DB_TABLE_SCRAP} WHERE listing_url = %s",
@@ -716,20 +711,17 @@ class MudahMyService:
             )
             row = self.cursor.fetchone()
 
-            # Normalisasi price -> integer
             price_int = 0
             if car_data.get("price"):
-                match_price = re.sub(r"[^\d]", "", car_data["price"])  # buang non-digit
+                match_price = re.sub(r"[^\d]", "", car_data["price"])
                 price_int = int(match_price) if match_price else 0
 
-            # Normalisasi year -> integer
             year_int = 0
             if car_data.get("year"):
                 match_year = re.search(r"(\d{4})", car_data["year"])
                 if match_year:
                     year_int = int(match_year.group(1))
 
-            # Pisahkan information_ads menjadi condition dan information_ads
             condition = "N/A"
             info_ads = car_data.get("information_ads", "")
             if info_ads:
@@ -739,6 +731,9 @@ class MudahMyService:
                     info_ads = parts[1].strip()
                 else:
                     info_ads = parts[0].strip()
+
+            image_urls = car_data.get("gambar", [])
+            image_urls_str = json.dumps(image_urls)
 
             if row:
                 car_id, old_price, current_version = row
@@ -754,11 +749,12 @@ class MudahMyService:
                         transmission=%s, seat_capacity=%s,
                         last_scraped_at=%s,
                         version=%s, condition=%s, engine_cc=%s,
-                        fuel_type=%s
+                        fuel_type=%s, images=%s
                     WHERE id=%s
                 """
 
                 new_version = current_version + 1
+
                 self.cursor.execute(update_query, (
                     car_data.get("brand"),
                     car_data.get("model"),
@@ -775,10 +771,10 @@ class MudahMyService:
                     condition,
                     car_data.get("engine_cc"),
                     car_data.get("fuel_type"),
+                    image_urls_str, 
                     car_id
                 ))
 
-                # Jika harga berubah, catat di history
                 if new_price != old_price and old_price != 0:
                     insert_history = f"""
                         INSERT INTO {DB_TABLE_HISTORY_PRICE} (car_id, old_price, new_price)
@@ -790,11 +786,11 @@ class MudahMyService:
                 insert_query = f"""
                     INSERT INTO {DB_TABLE_SCRAP}
                         (listing_url, brand, model, variant, information_ads, location,
-                         price, year, mileage, transmission, seat_capacity,
-                         version, condition, engine_cc, fuel_type)
+                        price, year, mileage, transmission, seat_capacity,
+                        version, condition, engine_cc, fuel_type, images)
                     VALUES
                         (%s, %s, %s, %s, %s, %s,
-                         %s, %s, %s, %s, %s, %s, %s, %s, %s)
+                        %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
                     RETURNING id
                 """
                 self.cursor.execute(insert_query, (
@@ -812,7 +808,8 @@ class MudahMyService:
                     1,
                     condition,
                     car_data.get("engine_cc"),
-                    car_data.get("fuel_type")
+                    car_data.get("fuel_type"),
+                    image_urls_str 
                 ))
                 car_id = self.cursor.fetchone()[0]
 
