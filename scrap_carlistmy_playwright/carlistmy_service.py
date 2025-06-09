@@ -429,10 +429,11 @@ class CarlistMyService:
             self.conn.rollback()
             logging.error(f"❌ Error menyimpan ke database: {e}")
 
-    def scrape_all_brands(self, start_page=1, max_pages=None):
+    def scrape_all_brands(self, start_page=1, pages=None):
         self.reset_scraping()
         base_url = os.getenv("CARLISTMY_LISTING_URL")
         limit_scrap = int(os.getenv("LIMIT_SCRAP", "0"))
+
         if not base_url:
             logging.error("❌ CARLISTMY_LISTING_URL belum di-set di .env")
             return
@@ -443,9 +444,14 @@ class CarlistMyService:
         except Exception as e:
             logging.warning(f"Gagal get IP: {e}")
 
-        page = start_page
+        # Jika pages tidak disediakan, gunakan range yang besar sebagai fallback
+        page_list = pages if pages else range(start_page, 9999)
+
         total_scraped = 0
-        while not self.stop_flag:
+        for page in page_list:
+            if self.stop_flag:
+                break
+
             paginated_url = f"{base_url}&page={page}"
             max_page_retries = 3
             page_retry_count = 0
@@ -514,6 +520,7 @@ class CarlistMyService:
                     logging.info(f"🏁 Limit scraping {limit_scrap} listing_url tercapai. Proses scraping selesai.")
                     self.stop_flag = True
                     break
+
                 logging.info(f"🔍 Scraping detail: {url}")
                 detail = self.scrape_detail(url)
                 if detail:
@@ -532,13 +539,11 @@ class CarlistMyService:
                             logging.warning(f"Gagal get IP: {e}")
                         self.listing_count = 0
 
-            page += 1
-            if max_pages and page > max_pages:
-                logging.info(f"🏁 Selesai scraping sampai halaman {max_pages}")
-                break
             if limit_scrap and total_scraped >= limit_scrap:
                 logging.info(f"🏁 Limit scraping {limit_scrap} listing_url tercapai. Proses scraping selesai.")
                 break
+
+            logging.info("⏭️ Melanjutkan ke halaman berikutnya...")
             time.sleep(random.uniform(5, 10))
 
         self.quit_browser()
