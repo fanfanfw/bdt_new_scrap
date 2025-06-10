@@ -616,23 +616,14 @@ class MudahMyService:
         self.reset_scraping()
         self.init_browser()
         try:
-            current_page = start_page
             total_scraped = 0
-            max_pages = 2  # Set the maximum pages to scrape (1 and 2)
-            
-            while current_page <= max_pages:  # Limit the scraping to only the first two pages
-                if self.stop_flag:
-                    logging.info("Stop flag terdeteksi, menghentikan scraping.")
-                    break
+            current_url = MUDAHMY_LISTING_URL
+            logging.info(f"Scraping URL utama saja: {current_url}")
+            listing_urls = self.scrape_page(self.page, current_url)
 
-                current_url = f"{MUDAHMY_LISTING_URL}?o={current_page}"
-                logging.info(f"Scraping halaman {current_page}: {current_url}")
-                listing_urls = self.scrape_page(self.page, current_url)
-
-                if not listing_urls:
-                    logging.info("Tidak ada listing URL ditemukan, selesai.")
-                    break
-
+            if not listing_urls:
+                logging.info("Tidak ada listing URL ditemukan, selesai.")
+            else:
                 for url in listing_urls:
                     if self.stop_flag:
                         break
@@ -653,23 +644,7 @@ class MudahMyService:
                     delay = random.uniform(15, 35)
                     logging.info(f"Menunggu {delay:.1f} detik sebelum listing berikutnya...")
                     time.sleep(delay)
-
-                # Re-init browser sebelum halaman berikutnya
-                self.quit_browser()
-                time.sleep(3)
-                self.init_browser()
-
-                # Update current_page berdasarkan mode descending
-                if descending:
-                    current_page -= 1
-                else:
-                    current_page += 1
-
-                delay = random.uniform(300, 600)  # 5-10 menit
-                logging.info(f"Menunggu {delay:.1f} detik sebelum halaman {'sebelumnya' if descending else 'berikutnya'}...")
-                time.sleep(delay)
-
-            logging.info(f"Selesai scraping semua listing dari halaman utama. Total data: {total_scraped}")
+            logging.info("Selesai scraping URL utama saja. Program dihentikan.")
         finally:
             self.quit_browser()
         return total_scraped
