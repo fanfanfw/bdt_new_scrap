@@ -576,57 +576,6 @@ class MudahMyService:
             self.quit_browser()
         return total_scraped, False
 
-    def scrape_all_brands(self, brand=None, model=None, start_page=1):
-        """
-        Baca CSV:
-          - Jika brand dan model diberikan, mulai scraping dari baris yang cocok,
-            lalu lanjut ke seluruh baris berikutnya.
-          - Jika tidak diberikan, scraping semua brand+model (dari baris pertama).
-        """
-        self.reset_scraping()
-        df = pd.read_csv(INPUT_FILE)
-
-        if brand and model:
-            df = df.reset_index(drop=True)
-            matching_rows = df[
-                (df['brand'].str.lower() == brand.lower()) &
-                (df['model'].str.lower() == model.lower())
-            ]
-            if matching_rows.empty:
-                logging.warning("Brand dan model tidak ditemukan dalam CSV.")
-                return
-
-            start_index = matching_rows.index[0]
-            logging.info(f"Mulai scraping dari baris {start_index} untuk brand={brand}, model={model} (start_page={start_page}).")
-
-            for i in range(start_index, len(df)):
-                row = df.iloc[i]
-                brand_name = row['brand']
-                model_name = row['model']
-                base_url = row['url']
-
-                if i == start_index:
-                    current_page = start_page
-                else:
-                    current_page = 1
-
-                logging.info(f"Mulai scraping brand: {brand_name}, model: {model_name}, start_page={current_page}")
-                total_scraped, _ = self.scrape_listings_for_brand(base_url, brand_name, model_name, current_page)
-                logging.info(f"Selesai scraping {brand_name} {model_name}. Total data: {total_scraped}")
-        else:
-            logging.info("Mulai scraping dari baris pertama (tidak ada filter brand/model).")
-            df = df.reset_index(drop=True)
-            for i, row in df.iterrows():
-                brand_name = row['brand']
-                model_name = row['model']
-                base_url = row['url']
-
-                logging.info(f"Mulai scraping brand: {brand_name}, model: {model_name}, start_page=1")
-                total_scraped, _ = self.scrape_listings_for_brand(base_url, brand_name, model_name, 1)
-                logging.info(f"Selesai scraping {brand_name} {model_name}. Total data: {total_scraped}")
-
-        logging.info("Proses scraping selesai untuk filter brand/model.")
-
     def scrape_all_from_main(self, start_page=1, descending=False):
         """
         Scrape semua listing dari halaman utama mudah.my (tanpa filter brand/model, langsung dari ENV MUDAHMY_LISTING_URL)
