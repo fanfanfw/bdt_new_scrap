@@ -95,7 +95,7 @@ class CarlistMyService:
         return ''.join(random.choices('abcdefghijklmnopqrstuvwxyz0123456789', k=8))
 
     def build_proxy_config(self):
-        proxy_mode = os.getenv("PROXY_MODE", "none").lower()
+        proxy_mode = os.getenv("PROXY_MODE_CARLIST", "none").lower()
 
         if proxy_mode == "oxylabs":
             username_base = os.getenv("PROXY_USERNAME", "")
