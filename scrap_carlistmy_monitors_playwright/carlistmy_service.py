@@ -95,7 +95,7 @@ class CarlistMyService:
         return ''.join(random.choices('abcdefghijklmnopqrstuvwxyz0123456789', k=8))
 
     def build_proxy_config(self):
-        proxy_mode = os.getenv("PROXY_MODE", "none").lower()
+        proxy_mode = os.getenv("PROXY_MODE_CARLIST", "none").lower()
 
         if proxy_mode == "oxylabs":
             username_base = os.getenv("PROXY_USERNAME", "")
@@ -120,7 +120,7 @@ class CarlistMyService:
         self.playwright = sync_playwright().start()
 
         launch_kwargs = {
-            "headless": False,
+            "headless": True,
             "args": [
                 "--disable-blink-features=AutomationControlled",
                 "--no-sandbox",
@@ -387,28 +387,22 @@ class CarlistMyService:
 
             if row:
                 car_id, old_price, version = row
-                if car["price"] != old_price:
-                    self.cursor.execute(f"""
-                        INSERT INTO {DB_TABLE_HISTORY_PRICE} (car_id, old_price, new_price)
-                        VALUES (%s, %s, %s)
-                    """, (car_id, old_price, car["price"]))
-
                 self.download_images(image_urls, brand, model, variant, car_id)
-
                 self.cursor.execute(f"""
                     UPDATE {DB_TABLE_SCRAP}
                     SET brand=%s, model_group=%s, model=%s, variant=%s, information_ads=%s,
                         location=%s, condition=%s, price=%s, year=%s, mileage=%s,
                         transmission=%s, seat_capacity=%s, engine_cc=%s, fuel_type=%s,
-                        last_scraped_at=%s, version=%s, images=%s
+                        last_scraped_at=%s, images=%s
                     WHERE id=%s
                 """, (
                     brand, model_group, model, variant, car.get("information_ads"),
                     car.get("location"), car.get("condition"),car.get("price"), car.get("year"), car.get("mileage"),
                     car.get("transmission"), car.get("seat_capacity"), car.get("engine_cc"), car.get("fuel_type"),
-                    now, version + 1, image_urls_str, car_id
+                    now, image_urls_str, car_id
                 ))
             else:
+                # INSERT dari detail (fallback, seharusnya jarang terjadi)
                 self.cursor.execute(f"""
                     INSERT INTO {DB_TABLE_SCRAP} (
                         listing_url, brand, model_group, model, variant, information_ads, location, condition,
@@ -440,112 +434,107 @@ class CarlistMyService:
             return
 
         self.init_browser()
-        try:
-            self.get_current_ip()
-        except Exception as e:
-            logging.warning(f"Gagal get IP: {e}")
-
-        # Jika pages tidak disediakan, gunakan range yang besar sebagai fallback
-        page_list = pages if pages else range(start_page, 9999)
 
         total_scraped = 0
-        for page in page_list:
+        paginated_url = base_url
+        logging.info(f"📄 Scraping halaman utama: {paginated_url}")
+        try:
+            self.page.goto(paginated_url, timeout=60000)
+            time.sleep(7)
+        except Exception as e:
+            logging.warning(f"❌ Gagal memuat halaman {paginated_url}: {e}")
+            take_screenshot(self.page, f"page_load_error_1")
+            self.quit_browser()
+            return
+
+        html = self.page.content()
+        soup = BeautifulSoup(html, "html.parser")
+        listing_divs = soup.select('[id^="listing_"]')
+
+        url_tag_price_list = []
+        for div in listing_divs:
+            link_elem = div.select_one("h2 a")
+            if link_elem:
+                href = link_elem.get("href")
+                if href:
+                    if href.startswith("/"):
+                        href = "https://www.carlist.my" + href
+                    tag_elem = div.select_one("span.visuallyhidden--small")
+                    tag_text = tag_elem.text.strip() if tag_elem else ""
+                    price_elem = div.select_one(".listing__price.delta.weight--bold")
+                    price_text = price_elem.text.strip() if price_elem else ""
+                    price_clean = price_text.replace('RM', '').replace(',', '').strip()
+                    try:
+                        price_int = int(price_clean)
+                    except Exception:
+                        price_int = 0
+                    url_tag_price_list.append((href, tag_text, price_int))
+        url_tag_price_list = list(set(url_tag_price_list))
+        logging.info(f"📄 Ditemukan {len(url_tag_price_list)} listing URL di halaman utama.")
+
+        if not url_tag_price_list:
+            logging.warning(f"📄 Ditemukan 0 listing URL di halaman utama")
+            take_screenshot(self.page, f"no_listing_page1")
+            self.quit_browser()
+            return
+
+        # UBAH DELAY menjadi 5-7 detik
+        logging.info("⏳ Menunggu selama 5-7 detik sebelum melanjutkan...")
+        time.sleep(random.uniform(5, 7))
+
+        urls_to_scrape = []
+        for url, ads_tag, price in url_tag_price_list:
             if self.stop_flag:
                 break
-
-            paginated_url = f"{base_url}&page={page}"
-            max_page_retries = 3
-            page_retry_count = 0
-            page_loaded = False
-
-            while page_retry_count < max_page_retries and not page_loaded:
+            if price == 0:
+                logging.info(f"SKIP: {url} | price: 0 (tidak valid, tidak diinsert)")
+                continue
+            self.cursor.execute(f"SELECT id, price, version FROM {DB_TABLE_SCRAP} WHERE listing_url = %s", (url,))
+            result = self.cursor.fetchone()
+            if not result:
                 try:
-                    logging.info(f"📄 Scraping halaman {page}: {paginated_url}")
-                    self.page.goto(paginated_url, timeout=60000)
-                    time.sleep(7)
-                    page_loaded = True
+                    # INSERT BARU: version=1
+                    self.cursor.execute(f"INSERT INTO {DB_TABLE_SCRAP} (listing_url, price, ads_tag, version) VALUES (%s, %s, %s, %s)", (url, price, ads_tag, 1))
+                    self.conn.commit()
+                    logging.info(f"INSERT: {url} | price: {price} | ads_tag: {ads_tag} | version: 1")
+                    urls_to_scrape.append(url)
                 except Exception as e:
-                    page_retry_count += 1
-                    logging.warning(f"❌ Gagal memuat halaman {paginated_url}: {e}")
-                    take_screenshot(self.page, f"page_load_error_{page}")
-                    if page_retry_count < max_page_retries:
-                        logging.info(f"🔄 Mencoba ulang halaman {page} (percobaan ke-{page_retry_count + 1})")
-                        self.quit_browser()
-                        time.sleep(10)
-                        self.init_browser()
-                        try:
-                            self.get_current_ip()
-                        except Exception as e:
-                            logging.warning(f"Gagal get IP: {e}")
-                        continue
-                    else:
-                        logging.error(f"❌ Gagal memuat halaman {page} setelah {max_page_retries} percobaan")
-                        self.stop_flag = True
-                        break
+                    self.conn.rollback()
+                    logging.error(f"Gagal insert awal listing_url: {url}, error: {e}")
+            else:
+                db_id, old_price, old_version = result
+                if price != old_price and old_price is not None:
+                    try:
+                        # UPDATE: version+1
+                        new_version = (old_version or 1) + 1
+                        self.cursor.execute(f"UPDATE {DB_TABLE_SCRAP} SET price=%s, version=%s WHERE id=%s", (price, new_version, db_id))
+                        self.cursor.execute(f"INSERT INTO {DB_TABLE_HISTORY_PRICE} (car_id, old_price, new_price) VALUES (%s, %s, %s)", (db_id, old_price, price))
+                        self.conn.commit()
+                        logging.info(f"UPDATE: {url} | price changed {old_price} -> {price} | version: {new_version}")
+                        urls_to_scrape.append(url)
+                    except Exception as e:
+                        self.conn.rollback()
+                        logging.error(f"Gagal update price/version atau insert price_history untuk {url}: {e}")
+                else:
+                    logging.info(f"SKIP: {url} | price: {price} | version: {old_version}")
 
-            if not page_loaded:
+        logging.info(f"Akan scrape detail {len(urls_to_scrape)} listing (baru atau harga berubah) di halaman utama.")
+
+        for url in urls_to_scrape:
+            if self.stop_flag:
                 break
-
-            html = self.page.content()
-            soup = BeautifulSoup(html, "html.parser")
-            listing_divs = soup.select('[id^="listing_"]')
-
-            urls = []
-            for div in listing_divs:
-                tag_elem = div.select_one("span.visuallyhidden--small")
-                tag_text = tag_elem.text.strip() if tag_elem else ""
-                if tag_text == "Featured":
-                    link_elem = div.select_one("h2 a")
-                    if link_elem:
-                        href = link_elem.get("href")
-                        if href:
-                            if href.startswith("/"):
-                                href = "https://www.carlist.my" + href
-                            urls.append(href)
-            urls = list(set(urls))
-            logging.info(f"📄 Ditemukan {len(urls)} listing URL di halaman {page} yang berlabel 'Featured'.")
-
-            if not urls:
-                logging.warning(f"📄 Ditemukan 0 listing URL dengan tag 'Featured' di halaman {page}")
-                take_screenshot(self.page, f"no_listing_page{page}")
+            if limit_scrap and total_scraped >= limit_scrap:
+                logging.info(f"🏁 Limit scraping {limit_scrap} listing_url tercapai. Proses scraping selesai.")
                 self.stop_flag = True
                 break
 
-            logging.info("⏳ Menunggu selama 15-30 detik sebelum melanjutkan...")
-            time.sleep(random.uniform(15, 30))
-
-            for url in urls:
-                if self.stop_flag:
-                    break
-                if limit_scrap and total_scraped >= limit_scrap:
-                    logging.info(f"🏁 Limit scraping {limit_scrap} listing_url tercapai. Proses scraping selesai.")
-                    self.stop_flag = True
-                    break
-
-                logging.info(f"🔍 Scraping detail: {url}")
-                detail = self.scrape_detail(url)
-                if detail:
-                    self.save_to_db(detail)
-                    self.listing_count += 1
-                    total_scraped += 1
-                    time.sleep(random.uniform(20, 40))
-
-                    if self.listing_count >= self.batch_size:
-                        self.quit_browser()
-                        time.sleep(5)
-                        self.init_browser()
-                        try:
-                            self.get_current_ip()
-                        except Exception as e:
-                            logging.warning(f"Gagal get IP: {e}")
-                        self.listing_count = 0
-
-            if limit_scrap and total_scraped >= limit_scrap:
-                logging.info(f"🏁 Limit scraping {limit_scrap} listing_url tercapai. Proses scraping selesai.")
-                break
-
-            logging.info("⏭️ Melanjutkan ke halaman berikutnya...")
-            time.sleep(random.uniform(5, 10))
+            logging.info(f"🔍 Scraping detail: {url}")
+            detail = self.scrape_detail(url)
+            if detail:
+                self.save_to_db(detail)
+                self.listing_count += 1
+                total_scraped += 1
+                time.sleep(random.uniform(20, 40))
 
         self.quit_browser()
         logging.info("✅ Proses scraping selesai.")
