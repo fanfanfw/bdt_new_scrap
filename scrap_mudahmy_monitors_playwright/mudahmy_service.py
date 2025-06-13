@@ -13,10 +13,8 @@ from .database import get_connection
 from pathlib import Path
 import requests
 import json
-import hashlib
 
-load_dotenv()
-
+load_dotenv(override=True)
 
 START_DATE = datetime.now().strftime('%Y%m%d')
 
@@ -87,10 +85,6 @@ def get_custom_proxy_list():
             continue
     return parsed
 
-def generate_hash(listing_url, timestamp):
-    data = f"{listing_url} {timestamp}"
-    return hashlib.sha256(data.encode('utf-8')).hexdigest()
-
 class MudahMyService:
     def __init__(self):
         self.stop_flag = False
@@ -143,10 +137,12 @@ class MudahMyService:
 
     def quit_browser(self):
         try:
-            self.browser.close()
+            if hasattr(self, "browser"):
+                self.browser.close()
         except Exception as e:
             logging.error(e)
-        self.playwright.stop()
+        if hasattr(self, "playwright"):
+            self.playwright.stop()
         logging.info("🛑 Browser Playwright ditutup.")
 
     def get_current_ip(self, page, retries=3):
@@ -167,7 +163,30 @@ class MudahMyService:
                 else:
                     time.sleep(7)
 
+    def insert_new_listing(self, listing_url, price):
+        """Insert listing_url baru ke database dengan status active dan price dari halaman utama."""
+        try:
+            insert_query = f"""
+                INSERT INTO {DB_TABLE_SCRAP} 
+                (listing_url, price, status, created_at) 
+                VALUES (%s, %s, 'active', NOW())
+                ON CONFLICT (listing_url) DO NOTHING
+                RETURNING id
+            """
+            self.cursor.execute(insert_query, (listing_url, price))
+            self.conn.commit()
+            result = self.cursor.fetchone()
+            if result:
+                logging.info(f"✅ Listing baru {listing_url} berhasil ditambahkan ke database dengan price {price}")
+                return True
+            return False
+        except Exception as e:
+            self.conn.rollback()
+            logging.error(f"❌ Error saat menambahkan listing baru: {e}")
+            return False
+
     def scrape_page(self, page, url):
+        """Scrape hanya dari halaman utama (MUDAHMY_LISTING_URL), ambil price dari halaman utama, insert listing_url dan price, lalu scrape detail."""
         try:
             delay = random.uniform(5, 10)
             logging.info(f"Menuju {url} (delay {delay:.1f}s)")
@@ -182,62 +201,50 @@ class MudahMyService:
 
             page.wait_for_load_state('networkidle', timeout=15000)
 
-            # Get all card containers
+            # Get all card containers ordered from top to bottom
             card_selector = "div[data-testid^='listing-ad-item-']"
             cards = page.query_selector_all(card_selector)
 
-            urls = []
+            urls_to_scrape = []
             for card in cards:
                 try:
-                    today_span = card.query_selector("span:has-text('Today')")
-                    if today_span:
-                        # Extract the time (e.g., "14:51")
-                        time_today = today_span.inner_text().strip()
-                        a_tag = card.query_selector("a[href*='mudah.my']")
-                        if a_tag:
-                            href = a_tag.get_attribute('href')
-                            if href:
-                                # Generate the hash for listing_url + time_today
-                                listing_today_hash = generate_hash(href, time_today)
-
-                                # Check if hash already exists in the database
-                                self.cursor.execute(f"SELECT id FROM {DB_TABLE_SCRAP} WHERE listing_today_hash = %s", (listing_today_hash,))
-                                existing_listing = self.cursor.fetchone()
-
-                                if existing_listing:
-                                    logging.info(f"Data dengan hash {listing_today_hash} sudah ada, melewati scraping untuk: {href}")
-                                    continue  # Skip scraping if hash already exists
-
-                                # Save the relevant data to the database
-                                self.save_to_db_with_time_hash(href, time_today, listing_today_hash)
-
-                                urls.append(href)
+                    a_tag = card.query_selector("a[href*='mudah.my']")
+                    if a_tag:
+                        href = a_tag.get_attribute('href')
+                        if href:
+                            # Dapatkan harga dari card (pakai logika test_ambil_price_mudahmy.py)
+                            current_price = self.get_price_from_listing(card)
+                            # Cek listing di database
+                            self.cursor.execute(
+                                f"SELECT id, price, status FROM {DB_TABLE_SCRAP} WHERE listing_url = %s",
+                                (href,)
+                            )
+                            existing = self.cursor.fetchone()
+                            if not existing:
+                                # Listing baru, masukkan ke database dengan status active dan price
+                                if self.insert_new_listing(href, current_price):
+                                    urls_to_scrape.append(href)
+                                    logging.info(f"Listing baru ditemukan dan ditambahkan: {href} dengan price {current_price}")
+                            else:
+                                # Listing sudah ada, cek harga
+                                db_price = existing[1] if existing[1] else 0
+                                if current_price != db_price:
+                                    # Harga berbeda, perlu update
+                                    urls_to_scrape.append(href)
+                                    logging.info(f"Harga berubah untuk {href}: {db_price} -> {current_price}")
+                                else:
+                                    logging.info(f"Skip listing {href}: harga sama ({current_price})")
                 except Exception as e:
                     logging.warning(f"❌ Error memproses card: {e}")
                     continue
 
-            total_listing = len(set(urls))
-            logging.info(f"📄 Ditemukan {total_listing} listing 'Today' di halaman {url}")
-            return list(set(urls))
+            total_listing = len(set(urls_to_scrape))
+            logging.info(f"📄 Ditemukan {total_listing} listing yang perlu di-scrape di halaman {url}")
+            return list(set(urls_to_scrape))
 
         except Exception as e:
             logging.error(f"Error saat scraping halaman: {e}")
             return []
-
-    def save_to_db_with_time_hash(self, listing_url, time_today, listing_today_hash):
-        try:
-            self.cursor.execute(f"""
-                INSERT INTO {DB_TABLE_SCRAP} 
-                (listing_url, time_today, listing_today_hash)
-                VALUES (%s, %s, %s)
-                ON CONFLICT (listing_url) 
-                DO UPDATE SET time_today = %s, listing_today_hash = %s
-            """, (listing_url, time_today, listing_today_hash, time_today, listing_today_hash))
-            self.conn.commit()
-            logging.info(f"✅ Data dengan hash {listing_today_hash} berhasil disimpan/diupdate untuk listing_url: {listing_url}")
-        except Exception as e:
-            self.conn.rollback()
-            logging.error(f"❌ Error menyimpan data dengan hash ke database: {e}")
 
     def download_image(self, url, file_path):
         """Download single image to file_path."""
@@ -412,14 +419,31 @@ class MudahMyService:
                     "#ad_view_car_specifications > div > div > div:nth-child(2) > div > div > div:nth-child(1) > div:nth-child(1) > div:nth-child(2)",
                     "div:has-text('Engine CC') + div",
                 ])
-                data["information_ads"] = safe_extract([
+                # Ambil informasi lengkap dari highlight (hanya dari elemen yang benar)
+                full_info = safe_extract([
                     "#ad_view_ad_highlights > div > div > div:nth-child(1) > div > div > div",
-                    "div.ad-highlight:first-child",
+                    "div.text-\[\#666666\].text-xs.lg\\:text-base",
+                    "//*[@id='ad_view_ad_highlights']/div/div/div[1]/div/div/div"
                 ])
+                # Pisahkan condition dan information_ads dari highlight
+                if full_info and full_info != "N/A":
+                    parts = full_info.split(",", 1)
+                    data["condition"] = parts[0].strip()
+                    data["information_ads"] = parts[1].strip() if len(parts) > 1 else ""
+                else:
+                    data["condition"] = "N/A"
+                    data["information_ads"] = ""
+                
+                logging.info(f"Extracted condition: {data['condition']}")
+                logging.info(f"Extracted information_ads: {data['information_ads']}")
+
+                # Perbaiki selector location agar lebih robust
                 data["location"] = safe_extract([
                     "#ad_view_ad_highlights > div > div > div.flex.flex-wrap.lg\\:flex-nowrap.gap-3\\.5 > div:nth-child(4) > div",
-                    "div:has-text('Location') + div",
-                ])
+                    "div.font-bold.truncate.text-sm.md\\:text-base",
+                    "//*[@id='ad_view_ad_highlights']/div/div/div[3]/div[4]/div",
+                    "#ad_view_ad_highlights div.font-bold.truncate",
+                ], selector_type="css")
                 data["price"] = safe_extract([
                     "div.flex.gap-1.md\\:items-end > div"
                 ])
@@ -459,7 +483,7 @@ class MudahMyService:
                 self.last_scraped_data = data
 
                 success, car_id = self.save_to_db(data)
-                if not success:
+                if car_id is None:
                     logging.error("Gagal menyimpan data ke database")
                     page.close()
                     return None
@@ -525,8 +549,18 @@ class MudahMyService:
 
                     if image_urls:
                         # Update data dengan URL gambar dan download
-                        data["gambar"] = list(image_urls)
+                        data["images"] = list(image_urls)
                         self.download_listing_images(url, image_urls, car_id)
+                        
+                        # Update images di database
+                        update_images_query = f"""
+                            UPDATE {DB_TABLE_SCRAP}
+                            SET images = %s
+                            WHERE id = %s
+                        """
+                        self.cursor.execute(update_images_query, (json.dumps(list(image_urls)), car_id))
+                        self.conn.commit()
+                        logging.info(f"✅ URL gambar berhasil diupdate untuk listing ID: {car_id}")
                     else:
                         logging.warning(f"Tidak ada gambar ditemukan untuk listing {url}")
 
@@ -612,42 +646,36 @@ class MudahMyService:
             self.quit_browser()
         return total_scraped, False
 
-    def scrape_all_from_main(self, start_page=1, descending=False):
+    def scrape_all_from_main(self):
         self.reset_scraping()
         self.init_browser()
         try:
-            total_scraped = 0
-            current_url = MUDAHMY_LISTING_URL
-            logging.info(f"Scraping URL utama saja: {current_url}")
-            listing_urls = self.scrape_page(self.page, current_url)
-
-            if not listing_urls:
-                logging.info("Tidak ada listing URL ditemukan, selesai.")
-            else:
-                for url in listing_urls:
-                    if self.stop_flag:
-                        break
-                    detail_data = self.scrape_listing_detail(self.context, url)
-                    if detail_data:
-                        max_db_retries = 3
-                        for attempt in range(1, max_db_retries + 1):
-                            try:
-                                self.save_to_db(detail_data)
-                                break
-                            except Exception as e:
-                                logging.warning(f"⚠️ Attempt {attempt} gagal simpan data untuk {url}: {e}")
-                                if attempt == max_db_retries:
-                                    logging.error(f"❌ Gagal simpan data setelah {max_db_retries} percobaan: {url}")
-                                else:
-                                    time.sleep(20)
-                        total_scraped += 1
-                    delay = random.uniform(15, 35)
-                    logging.info(f"Menunggu {delay:.1f} detik sebelum listing berikutnya...")
-                    time.sleep(delay)
-            logging.info("Selesai scraping URL utama saja. Program dihentikan.")
+            url = MUDAHMY_LISTING_URL
+            logging.info(f"Scraping halaman utama: {url}")
+            listing_urls = self.scrape_page(self.page, url)
+            for href in listing_urls:
+                if self.stop_flag:
+                    break
+                detail_data = self.scrape_listing_detail(self.context, href)
+                if detail_data:
+                    max_db_retries = 3
+                    for attempt in range(1, max_db_retries + 1):
+                        try:
+                            self.save_to_db(detail_data)
+                            break
+                        except Exception as e:
+                            logging.warning(f"⚠️ Attempt {attempt} gagal simpan data untuk {href}: {e}")
+                            if attempt == max_db_retries:
+                                logging.error(f"❌ Gagal simpan data setelah {max_db_retries} percobaan: {href}")
+                            else:
+                                time.sleep(20)
+                else:
+                    logging.warning(f"Gagal mengambil detail untuk URL: {href}")
+                delay = random.uniform(15, 35)
+                logging.info(f"Menunggu {delay:.1f} detik sebelum listing berikutnya...")
+                time.sleep(delay)
         finally:
             self.quit_browser()
-        return total_scraped
 
     def stop_scraping(self):
         logging.info("Permintaan untuk menghentikan scraping diterima.")
@@ -660,92 +688,84 @@ class MudahMyService:
 
     def save_to_db(self, car_data):
         try:
+            # Cek apakah listing_url sudah ada di database
             self.cursor.execute(
-                f"SELECT id, price, version FROM {DB_TABLE_SCRAP} WHERE listing_url = %s",
+                f"SELECT id, price FROM {DB_TABLE_SCRAP} WHERE listing_url = %s",
                 (car_data["listing_url"],)
             )
             row = self.cursor.fetchone()
 
+            # Jika data sudah ada, cek harga
             price_int = 0
             if car_data.get("price"):
                 match_price = re.sub(r"[^\d]", "", car_data["price"])
                 price_int = int(match_price) if match_price else 0
 
-            year_int = 0
-            if car_data.get("year"):
-                match_year = re.search(r"(\d{4})", car_data["year"])
-                if match_year:
-                    year_int = int(match_year.group(1))
-
-            condition = "N/A"
-            info_ads = car_data.get("information_ads", "")
-            if info_ads:
-                parts = info_ads.split(",", 1)
-                if len(parts) > 1:
-                    condition = parts[0].strip()
-                    info_ads = parts[1].strip()
-                else:
-                    info_ads = parts[0].strip()
-
-            image_urls = car_data.get("gambar", [])
-            image_urls_str = json.dumps(image_urls)
-
             if row:
-                car_id, old_price, current_version = row
+                car_id, old_price = row
                 old_price = old_price if old_price else 0
-                current_version = current_version if current_version else 0
-                new_price = price_int
 
+                # Cek apakah ada field penting yang masih NULL di database
+                self.cursor.execute(
+                    f"SELECT brand, model, variant, information_ads, location, year, mileage, transmission, seat_capacity, condition, engine_cc, fuel_type FROM {DB_TABLE_SCRAP} WHERE id = %s",
+                    (car_id,)
+                )
+                db_fields = self.cursor.fetchone()
+                needs_update = any(x is None for x in db_fields)
+
+                # Jika harga sama dan semua field sudah terisi, tidak perlu update
+                if old_price == price_int and not needs_update:
+                    logging.info(f"✅ Harga untuk {car_data['listing_url']} sudah sama dan data lengkap, melewatkan scraping.")
+                    return False, car_id
+
+                # Jika harga berbeda, atau ada field penting yang masih NULL, lakukan update data
                 update_query = f"""
                     UPDATE {DB_TABLE_SCRAP}
                     SET brand=%s, model=%s, variant=%s,
                         information_ads=%s, location=%s,
                         price=%s, year=%s, mileage=%s,
                         transmission=%s, seat_capacity=%s,
-                        last_scraped_at=%s,
-                        version=%s, condition=%s, engine_cc=%s,
+                        last_scraped_at=%s, condition=%s, engine_cc=%s,
                         fuel_type=%s, images=%s
                     WHERE id=%s
                 """
-
-                new_version = current_version + 1
-
                 self.cursor.execute(update_query, (
                     car_data.get("brand"),
                     car_data.get("model"),
                     car_data.get("variant"),
-                    info_ads,
+                    car_data.get("information_ads"),
                     car_data.get("location"),
-                    new_price,
-                    year_int,
+                    price_int,
+                    car_data.get("year"),
                     car_data.get("mileage"),
                     car_data.get("transmission"),
                     car_data.get("seat_capacity"),
                     datetime.now(),
-                    new_version,
-                    condition,
+                    car_data.get("condition", "N/A"),
                     car_data.get("engine_cc"),
                     car_data.get("fuel_type"),
-                    image_urls_str, 
+                    json.dumps(car_data.get("gambar", [])),
                     car_id
                 ))
 
-                if new_price != old_price and old_price != 0:
+                # Insert history jika harga berubah
+                if old_price != price_int and old_price != 0:
                     insert_history = f"""
                         INSERT INTO {DB_TABLE_HISTORY_PRICE} (car_id, old_price, new_price)
                         VALUES (%s, %s, %s)
                     """
-                    self.cursor.execute(insert_history, (car_id, old_price, new_price))
+                    self.cursor.execute(insert_history, (car_id, old_price, price_int))
 
             else:
+                # Jika listing_url belum ada, insert data baru
                 insert_query = f"""
                     INSERT INTO {DB_TABLE_SCRAP}
                         (listing_url, brand, model, variant, information_ads, location,
                         price, year, mileage, transmission, seat_capacity,
-                        version, condition, engine_cc, fuel_type, images)
+                        condition, engine_cc, fuel_type, images)
                     VALUES
                         (%s, %s, %s, %s, %s, %s,
-                        %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
+                        %s, %s, %s, %s, %s, %s, %s, %s, %s)
                     RETURNING id
                 """
                 self.cursor.execute(insert_query, (
@@ -753,23 +773,22 @@ class MudahMyService:
                     car_data.get("brand"),
                     car_data.get("model"),
                     car_data.get("variant"),
-                    info_ads,
+                    car_data.get("information_ads"),
                     car_data.get("location"),
                     price_int,
-                    year_int,
+                    car_data.get("year"),
                     car_data.get("mileage"),
                     car_data.get("transmission"),
                     car_data.get("seat_capacity"),
-                    1,
-                    condition,
+                    car_data.get("condition", "N/A"),
                     car_data.get("engine_cc"),
                     car_data.get("fuel_type"),
-                    image_urls_str 
+                    json.dumps(car_data.get("gambar", []))
                 ))
                 car_id = self.cursor.fetchone()[0]
 
             self.conn.commit()
-            logging.info(f"✅ Data untuk listing_url={car_data['listing_url']} berhasil disimpan/diupdate dengan ID: {car_id}")
+            logging.info(f"✅ Data untuk {car_data['listing_url']} berhasil disimpan/diupdate dengan ID: {car_id}")
             return True, car_id
 
         except Exception as e:
@@ -892,3 +911,39 @@ class MudahMyService:
             logging.info("Koneksi database ditutup, browser ditutup.")
         except Exception as e:
             logging.error(e)
+
+    def get_price_from_listing(self, card):
+        """Extract price from listing card element with proper handling of multiple price formats."""
+        try:
+            # ambil harga penuh
+            full_price = card.query_selector('div.text-sm.text-black.font-normal')
+            if full_price:
+                price_text = full_price.inner_text()
+            else:
+                # Jika tidak ada harga penuh, cek harga lainnya (bulanan atau lainnya)
+                other_price = card.query_selector('span.text-sm.font-bold, div.text-sm.font-bold')
+                if other_price:
+                    price_text = other_price.inner_text()
+                else:
+                    logging.warning("Tidak ditemukan elemen harga pada card")
+                    return 0
+            
+            # Bersihkan teks harga
+            price_clean = (
+                price_text.replace('RM', '')
+                .strip()
+                .replace(',', '')
+                .replace(' ', '')
+                .split('/')[0]  
+                .split()[0]    
+            )
+            
+            try:
+                return int(price_clean)
+            except ValueError as e:
+                logging.warning(f"Gagal mengkonversi harga '{price_text}' ke integer: {e}")
+                return 0
+                
+        except Exception as e:
+            logging.warning(f"Error extracting price from card: {e}")
+            return 0
