@@ -97,6 +97,11 @@ class MudahMyService:
 
         self.custom_proxies = get_custom_proxy_list()
         self.proxy_index = 0
+        
+        # Setup image storage path
+        self.image_base_path = os.path.join(base_dir, "images_mudah")
+        os.makedirs(self.image_base_path, exist_ok=True)
+        logging.info(f"Image base path: {self.image_base_path}")
 
     def init_browser(self):
         self.playwright = sync_playwright().start()
@@ -249,14 +254,18 @@ class MudahMyService:
     def download_image(self, url, file_path):
         """Download single image to file_path."""
         try:
-            os.makedirs(os.path.dirname(file_path), exist_ok=True)
+            os.makedirs(os.path.dirname(file_path), exist_ok=True, mode=0o755)
             resp = requests.get(url, timeout=30)
             if resp.status_code == 200:
                 with open(file_path, "wb") as f:
                     f.write(resp.content)
+                # Set file permissions
+                os.chmod(file_path, 0o644)
                 logging.info(f"Downloaded: {file_path}")
             else:
                 logging.warning(f"Gagal download: {url} - Status: {resp.status_code}")
+        except PermissionError as e:
+            logging.error(f"Permission error saat menyimpan file: {e}")
         except Exception as e:
             logging.error(f"Error download {url}: {str(e)}")
 
@@ -272,8 +281,10 @@ class MudahMyService:
             model = clean_filename(self.last_scraped_data.get("model", "unknown"))
             variant = clean_filename(self.last_scraped_data.get("variant", "unknown"))
             
-            folder_path = os.path.join("images_mudah", brand, model, variant, str(car_id))
-            os.makedirs(folder_path, exist_ok=True)
+            # Gunakan path absolut dari self.image_base_path
+            folder_path = os.path.join(self.image_base_path, brand, model, variant, str(car_id))
+            # Buat folder dengan permission yang benar
+            os.makedirs(folder_path, exist_ok=True, mode=0o755)
             
             # Download setiap gambar
             for idx, img_url in enumerate(image_urls):
