@@ -757,6 +757,16 @@ class MudahMyService:
                     self.cursor.execute(insert_history, (car_id, old_price, price_int))
 
             else:
+                # Convert year string to integer
+                year_str = car_data.get("year", "")
+                year_int = None
+                if year_str:
+                    # Extract first number from string, handle cases like "1995 or older"
+                    year_match = re.search(r'\d{4}', year_str)
+                    if year_match:
+                        year_int = int(year_match.group(0))
+                    logging.info(f"Converting year from '{year_str}' to {year_int}")
+
                 # Jika listing_url belum ada, insert data baru
                 insert_query = f"""
                     INSERT INTO {DB_TABLE_SCRAP}
@@ -947,3 +957,16 @@ class MudahMyService:
         except Exception as e:
             logging.warning(f"Error extracting price from card: {e}")
             return 0
+
+    def convert_year_to_int(self, year_str):
+        """Convert year string to integer, handling special cases like '1995 or older'"""
+        if not year_str or year_str == "N/A":
+            return None
+            
+        # Extract first number from string
+        year_match = re.search(r'\d{4}', year_str)
+        if year_match:
+            year_int = int(year_match.group(0))
+            logging.info(f"Converting year from '{year_str}' to {year_int}")
+            return year_int
+        return None
