@@ -7,8 +7,7 @@ load_dotenv()
 def main():
     scraper = MudahMyService()
     try:
-        # Langsung mengatur start_page ke 1, dan hanya memproses halaman 1 dan 2
-        scraper.scrape_all_from_main(start_page=1, descending=False)
+        scraper.scrape_all_from_main()
     finally:
         scraper.close()
 
