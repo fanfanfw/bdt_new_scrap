@@ -6,9 +6,13 @@ load_dotenv()
 
 def main():
     parser = argparse.ArgumentParser(description="Scrape data dari carlist.my")
+    parser.add_argument('--image-download', choices=['yes', 'no'], default='yes', help="Download images locally or not")
+
     args = parser.parse_args()
 
-    scraper = CarlistMyService()
+    download_images_locally = args.image_download == 'yes'
+
+    scraper = CarlistMyService(download_images_locally=download_images_locally)
     try:
         scraper.scrape_all_brands()
     finally:

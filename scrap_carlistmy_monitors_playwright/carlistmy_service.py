@@ -15,7 +15,7 @@ from playwright_stealth import stealth_sync
 
 from .database import get_connection
 
-load_dotenv()
+load_dotenv(override=True)
 
 START_DATE = datetime.now().strftime('%Y%m%d')
 
@@ -81,7 +81,8 @@ def get_custom_proxy_list():
     return parsed
 
 class CarlistMyService:
-    def __init__(self):
+    def __init__(self, download_images_locally=True):
+        self.download_images_locally = download_images_locally
         self.stop_flag = False
         self.batch_size = 25
         self.listing_count = 0
@@ -196,8 +197,17 @@ class CarlistMyService:
                 self.page.goto(url, wait_until="networkidle", timeout=60000)
                 time.sleep(7)
 
+                # Deteksi Cloudflare
+                page_title = self.page.title()
+                if page_title.strip() == "Just a moment...":
+                    logging.warning("🛑 Halaman diblokir Cloudflare saat detail. Mengganti proxy dan retry...")
+                    take_screenshot(self.page, "cloudflare_detected_detail")
+                    self.retry_with_new_proxy()
+                    retry_count += 1
+                    continue  # retry ulang
+
+                # Proses klik tab specification (aman jika gagal)
                 try:
-                    # Klik tab "Specification" (klik <a> kedua di tab list)
                     spec_tab_selector = (
                         "#listing-detail > section:nth-child(2) > div > div > "
                         "div.u-width-4\/6.u-width-1\\@mobile.u-flex.u-flex--column.u-padding-left-sm.u-padding-right-md.u-padding-top-none.u-padding-top-none\\@mobile.u-padding-right-sm\\@mobile "
@@ -205,37 +215,30 @@ class CarlistMyService:
                     )
                     if self.page.is_visible(spec_tab_selector):
                         self.page.click(spec_tab_selector)
-                        # Tunggu konten tab spesifikasi muncul
                         self.page.wait_for_selector(
                             '#tab-specifications span.u-text-bold.u-width-1\\/2.u-align-right',
                             timeout=7000
                         )
                         time.sleep(1)
                 except Exception as e:
-                    logging.warning(f"Gagal klik tab specifications atau menunggu konten: {e}")
+                    logging.warning(f"Gagal klik tab specifications: {e}")
 
-                engine_cc = None
-                fuel_type = None
+                engine_cc, fuel_type = None, None
                 try:
                     if self.page.is_visible('div#tab-specifications'):
-                        try:
-                            engine_cc_elem = self.page.query_selector(
-                                '#tab-specifications > div:nth-child(3) > div:nth-child(2) > div > span.u-text-bold.u-width-1\\/2.u-align-right'
-                            )
-                            engine_cc = engine_cc_elem.inner_text().strip() if engine_cc_elem else None
-                        except Exception as e:
-                            logging.warning(f"Gagal mengambil engine_cc: {e}")
-                        try:
-                            fuel_type_elem = self.page.query_selector(
-                                '#tab-specifications > div:nth-child(3) > div:nth-child(8) > div > span.u-text-bold.u-width-1\\/2.u-align-right'
-                            )
-                            fuel_type = fuel_type_elem.inner_text().strip() if fuel_type_elem else None
-                        except Exception as e:
-                            logging.warning(f"Gagal mengambil fuel_type: {e}")
-                except Exception as e:
-                    logging.warning(f"Gagal mengambil data spesifikasi: {e}")
+                        engine_cc_elem = self.page.query_selector(
+                            '#tab-specifications > div:nth-child(3) > div:nth-child(2) > div > span.u-text-bold.u-width-1\\/2.u-align-right'
+                        )
+                        engine_cc = engine_cc_elem.inner_text().strip() if engine_cc_elem else None
 
-                # Ambil semua gambar dari meta tag <meta name='prerender'>
+                        fuel_type_elem = self.page.query_selector(
+                            '#tab-specifications > div:nth-child(3) > div:nth-child(8) > div > span.u-text-bold.u-width-1\\/2.u-align-right'
+                        )
+                        fuel_type = fuel_type_elem.inner_text().strip() if fuel_type_elem else None
+                except Exception as e:
+                    logging.warning(f"Gagal ambil spesifikasi: {e}")
+
+                # Ambil gambar
                 meta_imgs = self.page.query_selector_all("head > meta[name='prerender']")
                 meta_img_urls = set()
                 try:
@@ -244,43 +247,31 @@ class CarlistMyService:
                         if content and content.startswith("https://"):
                             meta_img_urls.add(content)
                 except Exception as e:
-                    logging.warning(f"Gagal mengambil gambar dari meta prerender: {e}")
+                    logging.warning(f"Gagal ambil meta image: {e}")
 
-                # Ambil juga gambar dari #details-gallery img (jaga-jaga)
                 soup = BeautifulSoup(self.page.content(), "html.parser")
-                # --- Breadcrumb mapping ---
+
                 spans = soup.select("#listing-detail li > a > span")
-                brand = model = variant = None
-                model_group = None  
-                
-                # Filter spans yang tidak kosong
                 valid_spans = [span for span in spans if span.text.strip()]
                 num_spans = len(valid_spans)
-                
+
                 for i, span in enumerate(valid_spans):
                     logging.info(f"Span {i}: {span.text.strip()}")
-                logging.info(f"Jumlah spans valid dalam breadcrumb: {num_spans}")
-                
+
                 relevant_spans = valid_spans[2:] if len(valid_spans) > 2 else []
-                num_relevant = len(relevant_spans)
-                
-                if num_relevant == 2: 
-                    brand = relevant_spans[0].text.strip()
-                    model = relevant_spans[1].text.strip()
-                elif num_relevant == 3:
-                    brand = relevant_spans[0].text.strip()
-                    model = relevant_spans[1].text.strip()
-                    variant = relevant_spans[2].text.strip()
-                elif num_relevant == 4:
-                    brand = relevant_spans[0].text.strip()
-                    model_group = relevant_spans[1].text.strip()
-                    model = relevant_spans[2].text.strip()
-                    variant = relevant_spans[3].text.strip()
-                
+                brand = model = variant = model_group = None
+
+                if len(relevant_spans) == 2: 
+                    brand, model = relevant_spans[0].text.strip(), relevant_spans[1].text.strip()
+                elif len(relevant_spans) == 3:
+                    brand, model, variant = relevant_spans[0].text.strip(), relevant_spans[1].text.strip(), relevant_spans[2].text.strip()
+                elif len(relevant_spans) == 4:
+                    brand, model_group, model, variant = relevant_spans[0].text.strip(), relevant_spans[1].text.strip(), relevant_spans[2].text.strip(), relevant_spans[3].text.strip()
+
                 brand = (brand or "UNKNOWN").upper()
                 model = (model or "UNKNOWN").upper()
                 variant = (variant or "NO VARIANT").upper()
-                model_group = model_group.upper() if model_group else "NO MODEL_GROUP"
+                model_group = (model_group or "NO MODEL_GROUP").upper()
 
                 logging.info(f"Hasil mapping: Brand={brand}, Model Group={model_group}, Model={model}, Variant={variant}")
 
@@ -288,65 +279,55 @@ class CarlistMyService:
                 all_img_urls = set(gallery_imgs) | meta_img_urls
                 image = list(all_img_urls)
 
-                page_title = self.page.title()
-                if page_title.strip() == "Just a moment...":
-                    logging.warning("🛑 Halaman diblokir Cloudflare. Mengganti proxy dan retry...")
-                    take_screenshot(self.page, "cloudflare_detected")
-                    retry_count += 1
-                    self.retry_with_new_proxy()
-                    continue  
-                else:
-                    soup = BeautifulSoup(self.page.content(), "html.parser")
+                def extract(selector):
+                    element = soup.select_one(selector)
+                    return element.text.strip() if element else None
 
-                    def extract(selector):
-                        element = soup.select_one(selector)
-                        return element.text.strip() if element else None
-                    
-                    def get_location_parts(soup):
-                        # Ambil semua span child
-                        spans = soup.select("div.c-card__body > div.u-flex.u-align-items-center > div > div > span")
-                        valid_spans = [span.text.strip() for span in spans if span.text.strip()]
-                        if len(valid_spans) >= 2:
-                            return " - ".join(valid_spans[-2:])
-                        elif len(valid_spans) == 1:
-                            return valid_spans[0]
-                        return ""
+                def get_location_parts(soup):
+                    spans = soup.select("div.c-card__body > div.u-flex.u-align-items-center > div > div > span")
+                    valid_spans = [span.text.strip() for span in spans if span.text.strip()]
+                    if len(valid_spans) >= 2:
+                        return " - ".join(valid_spans[-2:])
+                    elif len(valid_spans) == 1:
+                        return valid_spans[0]
+                    return ""
 
-                    information_ads = extract("div:nth-child(1) > span.u-color-muted")
-                    location = get_location_parts(soup)
-                    condition = extract("div.owl-stage div:nth-child(1) span.u-text-bold")
-                    price_string = extract("div.listing__item-price > h3")
-                    year = extract("div.owl-stage div:nth-child(2) span.u-text-bold")
-                    mileage = extract("div.owl-stage div:nth-child(3) span.u-text-bold")
-                    transmission = extract("div.owl-stage div:nth-child(6) span.u-text-bold")
-                    seat_capacity = extract("div.owl-stage div:nth-child(7) span.u-text-bold")
-                    price = int(re.sub(r"[^\d]", "", price_string)) if price_string else 0
-                    year_int = int(re.search(r"\d{4}", year).group()) if year else 0
+                information_ads = extract("div:nth-child(1) > span.u-color-muted")
+                location = get_location_parts(soup)
+                condition = extract("div.owl-stage div:nth-child(1) span.u-text-bold")
+                price_string = extract("div.listing__item-price > h3")
+                year = extract("div.owl-stage div:nth-child(2) span.u-text-bold")
+                mileage = extract("div.owl-stage div:nth-child(3) span.u-text-bold")
+                transmission = extract("div.owl-stage div:nth-child(6) span.u-text-bold")
+                seat_capacity = extract("div.owl-stage div:nth-child(7) span.u-text-bold")
 
-                    return {
-                        "listing_url": url,
-                        "brand": brand,
-                        "model_group": model_group,
-                        "model": model,
-                        "variant": variant,
-                        "information_ads": information_ads,
-                        "location": location,
-                        "condition": condition,
-                        "price": price,
-                        "year": year_int,
-                        "mileage": mileage,
-                        "transmission": transmission,
-                        "seat_capacity": seat_capacity,
-                        "image": image,
-                        "engine_cc": engine_cc,
-                        "fuel_type": fuel_type,
-                    }
+                price = int(re.sub(r"[^\d]", "", price_string)) if price_string else 0
+                year_int = int(re.search(r"\d{4}", year).group()) if year else 0
+
+                return {
+                    "listing_url": url,
+                    "brand": brand,
+                    "model_group": model_group,
+                    "model": model,
+                    "variant": variant,
+                    "information_ads": information_ads,
+                    "location": location,
+                    "condition": condition,
+                    "price": price,
+                    "year": year_int,
+                    "mileage": mileage,
+                    "transmission": transmission,
+                    "seat_capacity": seat_capacity,
+                    "image": image,
+                    "engine_cc": engine_cc,
+                    "fuel_type": fuel_type,
+                }
 
             except Exception as e:
                 logging.error(f"Gagal scraping detail {url}: {e}")
                 take_screenshot(self.page, "scrape_detail_error")
-                retry_count += 1
                 self.retry_with_new_proxy()
+                retry_count += 1
 
         logging.error(f"❌ Gagal mengambil data dari {url} setelah {max_retries} percobaan.")
         return None
@@ -387,7 +368,8 @@ class CarlistMyService:
 
             if row:
                 car_id, old_price, version = row
-                self.download_images(image_urls, brand, model, variant, car_id)
+                if self.download_images_locally:
+                    self.download_images(image_urls, brand, model, variant, car_id)
                 self.cursor.execute(f"""
                     UPDATE {DB_TABLE_SCRAP}
                     SET brand=%s, model_group=%s, model=%s, variant=%s, information_ads=%s,
@@ -402,7 +384,6 @@ class CarlistMyService:
                     now, image_urls_str, car_id
                 ))
             else:
-                # INSERT dari detail (fallback, seharusnya jarang terjadi)
                 self.cursor.execute(f"""
                     INSERT INTO {DB_TABLE_SCRAP} (
                         listing_url, brand, model_group, model, variant, information_ads, location, condition,
@@ -416,7 +397,8 @@ class CarlistMyService:
                     car.get("seat_capacity"), car.get("engine_cc"), car.get("fuel_type"), 1, image_urls_str
                 ))
                 car_id = self.cursor.fetchone()[0]
-                self.download_images(image_urls, brand, model, variant, car_id)
+                if self.download_images_locally:
+                    self.download_images(image_urls, brand, model, variant, car_id)
 
             self.conn.commit()
             logging.info(f"✅ Data untuk {car['listing_url']} berhasil disimpan/diupdate.")
@@ -424,7 +406,7 @@ class CarlistMyService:
             self.conn.rollback()
             logging.error(f"❌ Error menyimpan ke database: {e}")
 
-    def scrape_all_brands(self, start_page=1, pages=None):
+    def scrape_all_brands(self, start_page=1, pages=None, max_main_page_retries=3):
         self.reset_scraping()
         base_url = os.getenv("CARLISTMY_LISTING_URL")
         limit_scrap = int(os.getenv("LIMIT_SCRAP", "0"))
@@ -433,24 +415,42 @@ class CarlistMyService:
             logging.error("❌ CARLISTMY_LISTING_URL belum di-set di .env")
             return
 
-        self.init_browser()
+        retries = 0
+        success = False
 
-        total_scraped = 0
-        paginated_url = base_url
-        logging.info(f"📄 Scraping halaman utama: {paginated_url}")
-        try:
-            self.page.goto(paginated_url, timeout=60000)
-            time.sleep(7)
-        except Exception as e:
-            logging.warning(f"❌ Gagal memuat halaman {paginated_url}: {e}")
-            take_screenshot(self.page, f"page_load_error_1")
-            self.quit_browser()
+        while retries < max_main_page_retries and not success:
+            self.init_browser()
+
+            paginated_url = base_url
+            logging.info(f"📄 Scraping halaman utama: {paginated_url}")
+            try:
+                self.page.goto(paginated_url, timeout=60000)
+                time.sleep(7)
+            except Exception as e:
+                logging.warning(f"❌ Gagal memuat halaman {paginated_url}: {e}")
+                take_screenshot(self.page, f"page_load_error_retry_{retries+1}")
+                self.quit_browser()
+                retries += 1
+                continue
+
+            html = self.page.content()
+            soup = BeautifulSoup(html, "html.parser")
+            listing_divs = soup.select('[id^="listing_"]')
+
+            if not listing_divs:
+                logging.warning(f"📄 Ditemukan 0 listing URL di halaman utama pada attempt ke-{retries+1}")
+                take_screenshot(self.page, f"no_listing_page_retry_{retries+1}")
+                self.quit_browser()
+                retries += 1
+                continue
+            else:
+                success = True
+
+        if not success:
+            logging.error(f"❌ Gagal mendapatkan listing URL setelah {max_main_page_retries} attempt.")
             return
 
-        html = self.page.content()
-        soup = BeautifulSoup(html, "html.parser")
-        listing_divs = soup.select('[id^="listing_"]')
-
+        # Ambil semua listing URL
         url_tag_price_list = []
         for div in listing_divs:
             link_elem = div.select_one("h2 a")
@@ -469,18 +469,17 @@ class CarlistMyService:
                     except Exception:
                         price_int = 0
                     url_tag_price_list.append((href, tag_text, price_int))
+
         url_tag_price_list = list(set(url_tag_price_list))
         logging.info(f"📄 Ditemukan {len(url_tag_price_list)} listing URL di halaman utama.")
 
-        if not url_tag_price_list:
-            logging.warning(f"📄 Ditemukan 0 listing URL di halaman utama")
-            take_screenshot(self.page, f"no_listing_page1")
-            self.quit_browser()
-            return
-
-        # UBAH DELAY menjadi 5-7 detik
         logging.info("⏳ Menunggu selama 5-7 detik sebelum melanjutkan...")
         time.sleep(random.uniform(5, 7))
+
+        # Statistik insert/update/skip
+        total_listing = len(url_tag_price_list)
+        insert_update_count = 0
+        skip_count = 0
 
         urls_to_scrape = []
         for url, ads_tag, price in url_tag_price_list:
@@ -488,16 +487,19 @@ class CarlistMyService:
                 break
             if price == 0:
                 logging.info(f"SKIP: {url} | price: 0 (tidak valid, tidak diinsert)")
+                skip_count += 1
                 continue
+
             self.cursor.execute(f"SELECT id, price, version FROM {DB_TABLE_SCRAP} WHERE listing_url = %s", (url,))
             result = self.cursor.fetchone()
+
             if not result:
                 try:
-                    # INSERT BARU: version=1
                     self.cursor.execute(f"INSERT INTO {DB_TABLE_SCRAP} (listing_url, price, ads_tag, version) VALUES (%s, %s, %s, %s)", (url, price, ads_tag, 1))
                     self.conn.commit()
                     logging.info(f"INSERT: {url} | price: {price} | ads_tag: {ads_tag} | version: 1")
                     urls_to_scrape.append(url)
+                    insert_update_count += 1
                 except Exception as e:
                     self.conn.rollback()
                     logging.error(f"Gagal insert awal listing_url: {url}, error: {e}")
@@ -505,21 +507,28 @@ class CarlistMyService:
                 db_id, old_price, old_version = result
                 if price != old_price and old_price is not None:
                     try:
-                        # UPDATE: version+1
                         new_version = (old_version or 1) + 1
                         self.cursor.execute(f"UPDATE {DB_TABLE_SCRAP} SET price=%s, version=%s WHERE id=%s", (price, new_version, db_id))
                         self.cursor.execute(f"INSERT INTO {DB_TABLE_HISTORY_PRICE} (car_id, old_price, new_price) VALUES (%s, %s, %s)", (db_id, old_price, price))
                         self.conn.commit()
                         logging.info(f"UPDATE: {url} | price changed {old_price} -> {price} | version: {new_version}")
                         urls_to_scrape.append(url)
+                        insert_update_count += 1
                     except Exception as e:
                         self.conn.rollback()
                         logging.error(f"Gagal update price/version atau insert price_history untuk {url}: {e}")
                 else:
                     logging.info(f"SKIP: {url} | price: {price} | version: {old_version}")
+                    skip_count += 1
+
+        logging.info(f"📊 Statistik listing:")
+        logging.info(f"Total ditemukan: {total_listing}")
+        logging.info(f"Insert/update: {insert_update_count}")
+        logging.info(f"Skip: {skip_count}")
 
         logging.info(f"Akan scrape detail {len(urls_to_scrape)} listing (baru atau harga berubah) di halaman utama.")
 
+        total_scraped = 0
         for url in urls_to_scrape:
             if self.stop_flag:
                 break
