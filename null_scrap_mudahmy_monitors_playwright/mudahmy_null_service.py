@@ -32,7 +32,7 @@ base_dir = Path(__file__).resolve().parents[1]
 log_dir = base_dir / "logs"
 log_dir.mkdir(parents=True, exist_ok=True)
 
-log_file = log_dir / f"scrape_mudahmy_{START_DATE}.log"
+log_file = log_dir / f"null_scrape_mudahmy_{START_DATE}.log"
 
 # ================== Setup Logging
 logging.basicConfig(
