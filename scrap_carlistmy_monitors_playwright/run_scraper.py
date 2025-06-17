@@ -2,7 +2,7 @@ import argparse
 from scrap_carlistmy_monitors_playwright.carlistmy_service import CarlistMyService
 from dotenv import load_dotenv
 
-load_dotenv()
+load_dotenv(override=True)
 
 def main():
     parser = argparse.ArgumentParser(description="Scrape data dari carlist.my")
