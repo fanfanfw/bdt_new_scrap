@@ -2,7 +2,7 @@ import argparse
 from scrap_mudahmy_monitors_playwright.mudahmy_service import MudahMyService
 from dotenv import load_dotenv
 
-load_dotenv()
+load_dotenv(override=True)
 
 def main():
     scraper = MudahMyService()
