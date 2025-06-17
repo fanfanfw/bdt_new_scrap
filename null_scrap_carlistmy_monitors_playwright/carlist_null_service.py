@@ -82,7 +82,7 @@ class CarlistMyNullService:
         self.playwright = sync_playwright().start()
         proxy_cfg = self.build_proxy()
 
-        args = {"headless": False, "args": ["--disable-blink-features=AutomationControlled", "--no-sandbox"]}
+        args = {"headless": True, "args": ["--disable-blink-features=AutomationControlled", "--no-sandbox"]}
         if proxy_cfg:
             args["proxy"] = proxy_cfg
 
