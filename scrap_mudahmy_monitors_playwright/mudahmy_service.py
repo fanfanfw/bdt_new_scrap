@@ -86,7 +86,7 @@ def get_custom_proxy_list():
     return parsed
 
 class MudahMyService:
-    def __init__(self):
+    def __init__(self, download_images_locally=True):
         self.stop_flag = False
         self.batch_size = 40
         self.listing_count = 0
@@ -269,30 +269,30 @@ class MudahMyService:
             logging.error(f"Error download {url}: {str(e)}")
 
     def download_listing_images(self, listing_url, image_urls, car_id):
-        """Download all images for a listing into images_mudah/brand/model/variant/db_id/image_{n}.jpg"""
+        if not self.download_images_locally:
+            logging.info("Lewati download gambar sesuai parameter --image-download=no")
+            return
+
         try:
-            # Clean brand, model and variant names untuk nama folder yang aman
+            # Fungsi membersihkan nama folder dari karakter aneh
             def clean_filename(name):
-                # Hapus karakter yang tidak diinginkan, ganti dengan underscore
                 return re.sub(r'[<>:"/\\|?*]', '_', str(name).strip())
-            
+
             brand = clean_filename(self.last_scraped_data.get("brand", "unknown"))
             model = clean_filename(self.last_scraped_data.get("model", "unknown"))
             variant = clean_filename(self.last_scraped_data.get("variant", "unknown"))
-            
-            # Gunakan path absolut dari self.image_base_path
+
+            # Path penyimpanan gambar
             folder_path = os.path.join(self.image_base_path, brand, model, variant, str(car_id))
-            # Buat folder dengan permission yang benar
             os.makedirs(folder_path, exist_ok=True, mode=0o755)
-            
-            # Download setiap gambar
+
             for idx, img_url in enumerate(image_urls):
                 clean_url = img_url.split('?')[0]
                 if not clean_url.startswith('http'):
                     clean_url = f"https:{clean_url}"
                 file_path = os.path.join(folder_path, f"image_{idx+1}.jpg")
                 self.download_image(clean_url, file_path)
-                
+
             logging.info(f"Gambar disimpan di folder: {folder_path}")
         except Exception as e:
             logging.error(f"Error download images for listing ID {car_id}: {str(e)}")
