@@ -91,10 +91,9 @@ class MudahMyService:
         self.batch_size = 40
         self.listing_count = 0
         self.last_scraped_data = {} 
-
+        self.download_images_locally = download_images_locally
         self.conn = get_connection()
         self.cursor = self.conn.cursor()
-
         self.custom_proxies = get_custom_proxy_list()
         self.proxy_index = 0
         
