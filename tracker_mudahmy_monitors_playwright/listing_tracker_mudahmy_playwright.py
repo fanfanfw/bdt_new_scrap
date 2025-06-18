@@ -110,7 +110,7 @@ class ListingTrackerMudahmyPlaywright:
         self.playwright = sync_playwright().start()
 
         launch_kwargs = {
-            "headless": False,
+            "headless": True,
             "args": [
                 "--disable-blink-features=AutomationControlled",
                 "--no-sandbox",
@@ -195,7 +195,7 @@ class ListingTrackerMudahmyPlaywright:
     def random_delay(self, min_d=11, max_d=33):
         delay = random.uniform(min_d, max_d)
         logger.info(f"⏱️ Delay acak antar listing: {delay:.2f} detik")
-        sys.stdout.flush()  # pastikan log langsung keluar
+        sys.stdout.flush()  
         time.sleep(delay)
 
     def is_redirected(self, title, url):
