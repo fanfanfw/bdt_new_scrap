@@ -190,20 +190,33 @@ class MudahMyNullService:
             logging.error(f"❌ Error saat menambahkan listing baru: {e}")
             return False
 
-    def scrape_null_entries(self):
+    def scrape_null_entries(self, id_min=None, id_max=None, include_urgent=False):
         """
-        Scrape ulang semua listing yang kolom brand/model/variant/information_ads/location masih NULL.
+        Scrape ulang listing yang kolom brand/model/variant/information_ads/location masih NULL
+        ATAU field condition=URGENT, bisa difilter dengan range id.
         """
-        self.cursor.execute(f"""
-            SELECT listing_url FROM {DB_TABLE_SCRAP}
-            WHERE brand IS NULL OR model IS NULL OR variant IS NULL
-                OR information_ads IS NULL OR location IS NULL
-        """)
-        rows = self.cursor.fetchall()
-        urls = [r[0] for r in rows if r[0]]
-        logging.info(f"Total null listings found: {len(urls)}")
+        filter_null = "(brand IS NULL OR model IS NULL OR variant IS NULL OR information_ads IS NULL OR location IS NULL)"
+        if include_urgent:
+            filter_main = f"({filter_null} OR condition = 'URGENT')"
+        else:
+            filter_main = filter_null
 
-        for idx, url in enumerate(urls):
+        # Tambahkan filter id
+        filter_params = []
+        if id_min is not None:
+            filter_main += " AND id >= %s"
+            filter_params.append(id_min)
+        if id_max is not None:
+            filter_main += " AND id <= %s"
+            filter_params.append(id_max)
+
+        query = f"SELECT id, listing_url FROM {DB_TABLE_SCRAP} WHERE {filter_main}"
+        self.cursor.execute(query, tuple(filter_params))
+        rows = self.cursor.fetchall()
+        urls = [(r[0], r[1]) for r in rows if r[1]]
+        logging.info(f"Total filtered listings found: {len(urls)} (filters: id_min={id_min}, id_max={id_max}, urgent={include_urgent})")
+
+        for idx, (listing_id, url) in enumerate(urls):
             attempt = 0
             success = False
             last_error = None
@@ -274,6 +287,22 @@ class MudahMyNullService:
             logging.info(f"Gambar disimpan di folder: {folder_path}")
         except Exception as e:
             logging.error(f"Error download images for listing ID {car_id}: {str(e)}")
+            
+    def get_highlight_info(self, page):
+        try:
+            parent = page.query_selector('#ad_view_ad_highlights > div > div > div:nth-child(1) > div > div')
+            if not parent:
+                return None
+            children = parent.query_selector_all('div')
+            if len(children) == 2:
+                return children[1].inner_text().strip()
+            elif len(children) == 1:
+                return children[0].inner_text().strip()
+            else:
+                return parent.inner_text().strip()
+        except Exception as e:
+            logging.warning(f"❌ Gagal ekstrak highlight info: {e}")
+            return None
 
     def scrape_listing_detail(self, context, url):
         """Scrape detail listing di tab baru. Kembalikan dict data, atau None kalau gagal."""
@@ -408,12 +437,13 @@ class MudahMyNullService:
                     "div:has-text('Engine CC') + div",
                 ])
                 # Ambil informasi lengkap dari highlight (hanya dari elemen yang benar)
-                full_info = safe_extract([
-                    "#ad_view_ad_highlights > div > div > div:nth-child(1) > div > div > div",
-                    "div.text-\[\#666666\].text-xs.lg\\:text-base",
-                    "//*[@id='ad_view_ad_highlights']/div/div/div[1]/div/div/div"
-                ])
-                # Pisahkan condition dan information_ads dari highlight
+                full_info = self.get_highlight_info(page)
+                if not full_info:
+                    full_info = safe_extract([
+                        "#ad_view_ad_highlights > div > div > div:nth-child(1) > div > div > div",
+                        "div.text-\[\#666666\].text-xs.lg\\:text-base",
+                        "//*[@id='ad_view_ad_highlights']/div/div/div[1]/div/div/div"
+                    ])
                 if full_info and full_info != "N/A":
                     parts = full_info.split(",", 1)
                     data["condition"] = parts[0].strip()
@@ -425,7 +455,6 @@ class MudahMyNullService:
                 logging.info(f"Extracted condition: {data['condition']}")
                 logging.info(f"Extracted information_ads: {data['information_ads']}")
 
-                # Perbaiki selector location agar lebih robust
                 data["location"] = safe_extract([
                     "#ad_view_ad_highlights > div > div > div.flex.flex-wrap.lg\\:flex-nowrap.gap-3\\.5 > div:nth-child(4) > div",
                     "div.font-bold.truncate.text-sm.md\\:text-base",
@@ -604,13 +633,15 @@ class MudahMyNullService:
                 )
                 db_fields = self.cursor.fetchone()
                 needs_update = any(x is None for x in db_fields)
+                self.cursor.execute(
+                    f"SELECT condition FROM {DB_TABLE_SCRAP} WHERE id = %s",
+                    (car_id,)
+                )
+                cur_condition = self.cursor.fetchone()[0] if self.cursor.rowcount > 0 else None
 
-                # Jika harga sama dan semua field sudah terisi, tidak perlu update
-                if old_price == price_int and not needs_update:
-                    logging.info(f"✅ Harga untuk {car_data['listing_url']} sudah sama dan data lengkap, melewatkan scraping.")
+                if old_price == price_int and not needs_update and cur_condition != "URGENT":
+                    logging.info(f"✅ Harga dan data sudah lengkap dan bukan URGENT, melewatkan scraping.")
                     return False, car_id
-
-                # Jika harga berbeda, atau ada field penting yang masih NULL, lakukan update data
                 update_query = f"""
                     UPDATE {DB_TABLE_SCRAP}
                     SET brand=%s, model=%s, variant=%s,
