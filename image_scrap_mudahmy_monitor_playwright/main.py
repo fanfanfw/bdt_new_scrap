@@ -2,18 +2,60 @@ import os
 import json
 import requests
 import argparse
+import random
 from pathlib import Path
 from database import get_connection
 from tqdm import tqdm
+from dotenv import load_dotenv
+
+load_dotenv(override=True)
 
 BASE_FOLDER = "images_mudah"
+LOG_DIR = "logs"
+LOG_FILE = os.path.join(LOG_DIR, "image_download_mudah.log")
+
+raw_proxies = os.getenv("CUSTOM_PROXIES_MUDAH", "")
+proxies_list = []
+
+if raw_proxies:
+    proxy_entries = raw_proxies.split(",")
+    for entry in proxy_entries:
+        ip, port, user, pwd = entry.strip().split(":")
+        proxy_url = f"http://{user}:{pwd}@{ip}:{port}"
+        proxies_list.append(proxy_url)
+
+Path(LOG_DIR).mkdir(parents=True, exist_ok=True)
+
+def log_text(message):
+    with open(LOG_FILE, "a") as f:
+        f.write(message + "\n")
+
+def is_id_logged(id_):
+    if not os.path.exists(LOG_FILE):
+        return False
+    with open(LOG_FILE) as f:
+        for line in f:
+            if f"[ID {id_}]" in line:
+                return True
+    return False
+
+def get_random_proxy():
+    if not proxies_list:
+        return None
+    return random.choice(proxies_list)
 
 def create_folder(path):
     Path(path).mkdir(parents=True, exist_ok=True)
 
 def download_image(url, save_path):
     try:
-        response = requests.get(url, timeout=20)
+        proxy = get_random_proxy()
+        proxies = {
+            "http": proxy,
+            "https": proxy,
+        } if proxy else None
+
+        response = requests.get(url, timeout=20, proxies=proxies)
         response.raise_for_status()
         with open(save_path, "wb") as f:
             f.write(response.content)
@@ -46,6 +88,10 @@ def main(start_id=None, end_id=None):
     for row in tqdm(rows):
         id_, brand, model, variant, images_str = row
 
+        if is_id_logged(id_):
+            print(f"🔁 Melewati ID {id_} (sudah di-log)")
+            continue
+
         brand = brand or "UNKNOWN"
         model = model or "UNKNOWN"
         variant = variant or "UNKNOWN"
@@ -53,21 +99,42 @@ def main(start_id=None, end_id=None):
         folder_path = os.path.join(BASE_FOLDER, brand, model, variant, str(id_))
         create_folder(folder_path)
 
+        sukses, gagal = 0, 0
+
         try:
             images_list = json.loads(images_str)
+
+            proxy = get_random_proxy()
+            proxies = {"http": proxy, "https": proxy} if proxy else None
 
             for img_url in images_list:
                 filename = img_url.split("/")[-1]
                 save_path = os.path.join(folder_path, filename)
 
                 if os.path.exists(save_path):
-                    print(f"✔ File sudah ada: {save_path}")
+                    sukses += 1
                     continue
 
-                download_image(img_url, save_path)
+                try:
+                    response = requests.get(img_url, timeout=20, proxies=proxies)
+                    response.raise_for_status()
+                    with open(save_path, "wb") as f:
+                        f.write(response.content)
+                    sukses += 1
+                except Exception as e:
+                    print(f"❌ Gagal download {img_url} -> {e}")
+                    gagal += 1
+
+            if gagal == 0:
+                log_text(f"[ID {id_}] ✅ SUCCESS: {sukses} downloaded, {gagal} failed")
+            elif sukses > 0:
+                log_text(f"[ID {id_}] ⚠️ PARTIAL: {sukses} downloaded, {gagal} failed")
+            else:
+                log_text(f"[ID {id_}] ❌ FAILED: {sukses} downloaded, {gagal} failed")
 
         except Exception as e:
             print(f"❌ Error parsing images id={id_}: {e}")
+            log_text(f"[ID {id_}] ❌ ERROR: Failed to parse images")
 
     cursor.close()
     conn.close()
