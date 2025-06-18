@@ -65,24 +65,12 @@ def get_custom_proxy_list():
             continue
     return parsed
 
-
-def should_use_proxy():
-    return (
-            os.getenv("USE_PROXY_OXYLABS", "false").lower() == "true" and
-            os.getenv("PROXY_SERVER") and
-            os.getenv("PROXY_USERNAME") and
-            os.getenv("PROXY_PASSWORD")
-    )
-
-
 class ListingTrackerMudahmyPlaywright:
     def __init__(self, batch_size=5):
         self.batch_size = batch_size
-        self.redirect_url = "https://www.mudah.my/malaysia/cars-for-sale"
         self.active_selector = "#ad_view_ad_highlights h1"
         self.sold_text_indicator = "This car has already been sold."
         self.custom_proxies = get_custom_proxy_list()
-        self.proxy_index = 0
         self.session_id = self.generate_session_id()
 
     def generate_session_id(self):
@@ -138,18 +126,6 @@ class ListingTrackerMudahmyPlaywright:
         stealth_sync(self.page)
 
         logging.info("✅ Browser Playwright berhasil diinisialisasi.")
-
-    def detect_anti_bot(self):
-        try:
-            content = self.page.content()
-            if "Checking your browser before accessing" in content or "cf-browser-verification" in content or "Server Error" in content:
-                take_screenshot(self.page, "cloudflare_block")
-                logging.warning("⚠️ Terkena proteksi anti-bot. Akan ganti proxy dan retry...")
-                return True
-            return False
-        except Exception as e:
-            logging.warning(f"❌ Gagal mendeteksi anti-bot: {e}")
-            return False
 
     def retry_with_new_proxy(self):
         try:
