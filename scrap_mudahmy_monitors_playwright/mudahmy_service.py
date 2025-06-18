@@ -93,6 +93,7 @@ class MudahMyService:
         self.conn = get_connection()
         self.cursor = self.conn.cursor()
         self.custom_proxies = get_custom_proxy_list()
+        self.last_used_proxy = None
         
         # Setup image storage path
         self.image_base_path = os.path.join(base_dir, "images_mudah")
@@ -111,24 +112,33 @@ class MudahMyService:
         }
 
         proxy_mode = os.getenv("PROXY_MODE_MUDAH", "none").lower()
+        proxy_used = None
+
         if proxy_mode == "oxylabs":
             launch_kwargs["proxy"] = {
                 "server": os.getenv("PROXY_SERVER"),
                 "username": os.getenv("PROXY_USERNAME"),
                 "password": os.getenv("PROXY_PASSWORD")
             }
+            proxy_used = launch_kwargs["proxy"]["server"]
             logging.info("🌐 Proxy aktif (Oxylabs digunakan)")
         elif proxy_mode == "custom" and self.custom_proxies:
-            proxy = random.choice(self.custom_proxies)
+            proxies = [p for p in self.custom_proxies if p["server"] != self.last_used_proxy]
+            if not proxies:
+                proxies = self.custom_proxies
+            proxy = random.choice(proxies)
+            proxy_used = proxy["server"]
             launch_kwargs["proxy"] = proxy
             logging.info(f"🌐 Proxy custom digunakan (random): {proxy['server']}")
         else:
             logging.info("⚡ Menjalankan browser tanpa proxy")
 
+        self.last_used_proxy = proxy_used
+
         self.browser = self.playwright.chromium.launch(**launch_kwargs)
         self.context = self.browser.new_context(
             user_agent="Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
-            viewport={"width": 1920, "height": 1080},  # Set to full page size
+            viewport={"width": 1920, "height": 1080},
             locale="en-US",
             timezone_id="Asia/Kuala_Lumpur"
         )
@@ -285,8 +295,8 @@ class MudahMyService:
             try:
                 logging.info(f"Navigating to detail page: {url} (Attempt {attempt+1})")
                 page.goto(url, wait_until="domcontentloaded", timeout=60000)
-                
-                # Check for blocks/captcha
+
+                # Check if blocked
                 if (
                     "Access Denied" in page.title() or
                     "block" in page.url or
@@ -300,7 +310,7 @@ class MudahMyService:
 
                 try:
                     page.wait_for_selector('#ad_view_car_specifications', timeout=15000)
-                    time.sleep(3)  # Wait for animations
+                    time.sleep(3)
                 except Exception as e:
                     logging.warning(f"Specifications section tidak ditemukan: {e}")
                     attempt += 1
@@ -562,8 +572,17 @@ class MudahMyService:
 
             except Exception as e:
                 logging.error(f"Scraping detail failed: {e}")
-                attempt += 1
                 page.close()
+
+                if "ERR_TUNNEL_CONNECTION_FAILED" in str(e) or "net::" in str(e):
+                    logging.warning("🚨 Proxy mungkin gagal/tidak stabil. Re-inisialisasi browser dengan proxy baru...")
+                    self.quit_browser()
+                    time.sleep(random.uniform(5, 10))
+                    self.init_browser()
+                    context = self.context 
+                    continue 
+
+                attempt += 1
                 if attempt < max_retries:
                     logging.warning(f"Mencoba ulang detail scraping untuk {url} (Attempt {attempt+1})...")
                     time.sleep(random.uniform(15, 20))
@@ -576,7 +595,7 @@ class MudahMyService:
         current_page = start_page
         self.init_browser()
         try:
-            while current_page > 0:  # Ubah kondisi untuk mendukung descending
+            while current_page > 0: 
                 if self.stop_flag:
                     logging.info("Stop flag terdeteksi, menghentikan scraping brand ini.")
                     break
