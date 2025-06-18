@@ -3,9 +3,7 @@ import time
 import random
 import logging
 import re
-import pandas as pd
 from datetime import datetime
-from urllib.parse import urljoin, urlparse
 from dotenv import load_dotenv
 from playwright.sync_api import sync_playwright
 from playwright_stealth import stealth_sync
@@ -95,7 +93,6 @@ class MudahMyService:
         self.conn = get_connection()
         self.cursor = self.conn.cursor()
         self.custom_proxies = get_custom_proxy_list()
-        self.proxy_index = 0
         
         # Setup image storage path
         self.image_base_path = os.path.join(base_dir, "images_mudah")
@@ -148,24 +145,6 @@ class MudahMyService:
         if hasattr(self, "playwright"):
             self.playwright.stop()
         logging.info("🛑 Browser Playwright ditutup.")
-
-    def get_current_ip(self, page, retries=3):
-        """Contoh memanggil ip.oxylabs.io untuk cek IP."""
-        for attempt in range(1, retries + 1):
-            try:
-                page.goto('https://ip.oxylabs.io/', timeout=10000)
-                ip_text = page.inner_text('body')
-                ip = ip_text.strip()
-                logging.info(f"IP Saat Ini: {ip}")
-                return
-            except Exception as e:
-                logging.warning(f"Attempt {attempt} gagal mendapatkan IP: {e}")
-                # Jika gagal screenshot pun
-                take_screenshot(page, "failed_get_ip")
-                if attempt == retries:
-                    logging.error("Gagal mendapatkan IP setelah beberapa percoaan")
-                else:
-                    time.sleep(7)
 
     def insert_new_listing(self, listing_url, price):
         """Insert listing_url baru ke database dengan status active dan price dari halaman utama."""
