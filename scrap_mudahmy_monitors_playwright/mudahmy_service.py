@@ -66,7 +66,6 @@ def should_use_proxy():
         os.getenv("PROXY_PASSWORD")
     )
 
-
 def get_custom_proxy_list():
     raw = os.getenv("CUSTOM_PROXIES_MUDAH", "")
     proxies = [p.strip() for p in raw.split(",") if p.strip()]
@@ -145,6 +144,22 @@ class MudahMyService:
         self.page = self.context.new_page()
         stealth_sync(self.page)
         logging.info("✅ Browser Playwright berhasil diinisialisasi.")
+
+    def get_highlight_info(self, page):
+        try:
+            parent = page.query_selector('#ad_view_ad_highlights > div > div > div:nth-child(1) > div > div')
+            if not parent:
+                return None
+            children = parent.query_selector_all('div')
+            if len(children) == 2:
+                return children[1].inner_text().strip()
+            elif len(children) == 1:
+                return children[0].inner_text().strip()
+            else:
+                return parent.inner_text().strip()
+        except Exception as e:
+            logging.warning(f"❌ Gagal ekstrak highlight info: {e}")
+            return None
 
     def quit_browser(self):
         try:
@@ -418,13 +433,13 @@ class MudahMyService:
                     "#ad_view_car_specifications > div > div > div:nth-child(2) > div > div > div:nth-child(1) > div:nth-child(1) > div:nth-child(2)",
                     "div:has-text('Engine CC') + div",
                 ])
-                # Ambil informasi lengkap dari highlight (hanya dari elemen yang benar)
-                full_info = safe_extract([
-                    "#ad_view_ad_highlights > div > div > div:nth-child(1) > div > div > div",
-                    "div.text-\[\#666666\].text-xs.lg\\:text-base",
-                    "//*[@id='ad_view_ad_highlights']/div/div/div[1]/div/div/div"
-                ])
-                # Pisahkan condition dan information_ads dari highlight
+                full_info = self.get_highlight_info(page)
+                if not full_info:
+                    full_info = safe_extract([
+                        "#ad_view_ad_highlights > div > div > div:nth-child(1) > div > div > div",
+                        "div.text-\[\#666666\].text-xs.lg\\:text-base",
+                        "//*[@id='ad_view_ad_highlights']/div/div/div[1]/div/div/div"
+                    ])
                 if full_info and full_info != "N/A":
                     parts = full_info.split(",", 1)
                     data["condition"] = parts[0].strip()
