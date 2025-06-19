@@ -189,7 +189,7 @@ class MudahMyNullService:
             self.conn.rollback()
             logging.error(f"❌ Error saat menambahkan listing baru: {e}")
             return False
-
+        
     def scrape_null_entries(self, id_min=None, id_max=None, include_urgent=False):
         """
         Scrape ulang listing yang kolom brand/model/variant/information_ads/location masih NULL
@@ -210,19 +210,39 @@ class MudahMyNullService:
             filter_main += " AND id <= %s"
             filter_params.append(id_max)
 
-        query = f"SELECT id, listing_url FROM {DB_TABLE_SCRAP} WHERE {filter_main}"
+        query = f"SELECT id, listing_url, status FROM {DB_TABLE_SCRAP} WHERE {filter_main}"
         self.cursor.execute(query, tuple(filter_params))
         rows = self.cursor.fetchall()
-        urls = [(r[0], r[1]) for r in rows if r[1]]
+        urls = [(r[0], r[1], r[2]) for r in rows if r[1]]  # Tambahkan status listing
         logging.info(f"Total filtered listings found: {len(urls)} (filters: id_min={id_min}, id_max={id_max}, urgent={include_urgent})")
 
-        for idx, (listing_id, url) in enumerate(urls):
+        for idx, (listing_id, url, status) in enumerate(urls):  # Mengambil status di sini
+            if status == "sold":  # Jika sudah sold, skip
+                logging.info(f"✅ Listing ID={listing_id} sudah SOLD, melewatkan pengecekan.")
+                continue 
+
             attempt = 0
             success = False
             last_error = None
             while attempt < 3 and not success:
                 try:
                     self.init_browser()
+                    self.page.goto(url, wait_until="domcontentloaded", timeout=30000)  # Navigasi ke halaman
+                    # Cek apakah URL di-redirect ke halaman daftar kendaraan (sold)
+                    current_url = self.page.url
+                    if "/malaysia/cars-for-sale" in current_url:
+                        logging.info(f"🔴 Listing {url} terdeteksi SOLD (redirect ke /malaysia/cars-for-sale)")
+                        # Update status menjadi "sold"
+                        self.cursor.execute(f"""
+                            UPDATE {DB_TABLE_SCRAP}
+                            SET status = 'sold', sold_at = NOW()
+                            WHERE id = %s
+                        """, (listing_id,))
+                        self.conn.commit()
+                        self.quit_browser()
+                        break  # Skip ke listing berikutnya``
+
+                    # Jika halaman valid, lanjutkan scraping
                     detail_data = self.scrape_listing_detail(self.context, url)
                     if detail_data:
                         _, car_id = self.save_to_db(detail_data)
