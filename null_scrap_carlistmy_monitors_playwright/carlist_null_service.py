@@ -82,7 +82,7 @@ class CarlistMyNullService:
         self.playwright = sync_playwright().start()
         proxy_cfg = self.build_proxy()
 
-        args = {"headless": True, "args": ["--disable-blink-features=AutomationControlled", "--no-sandbox"]}
+        args = {"headless": False, "args": ["--disable-blink-features=AutomationControlled", "--no-sandbox"]}
         if proxy_cfg:
             args["proxy"] = proxy_cfg
 
@@ -100,17 +100,26 @@ class CarlistMyNullService:
         except:
             pass
 
-    def scrape_null_entries(self):
-        self.cursor.execute(f"""
-            SELECT listing_url FROM {DB_TABLE_SCRAP}
-            WHERE brand IS NULL OR model IS NULL OR variant IS NULL
-                OR price IS NULL OR information_ads IS NULL OR location IS NULL
-        """)
+    def scrape_null_entries(self, id_min=None, id_max=None):
+        query = f"""
+            SELECT id, listing_url FROM {DB_TABLE_SCRAP}
+            WHERE (brand IS NULL OR model IS NULL OR variant IS NULL
+                OR price IS NULL OR information_ads IS NULL OR location IS NULL)
+        """
+        params = []
+        if id_min is not None:
+            query += " AND id >= %s"
+            params.append(id_min)
+        if id_max is not None:
+            query += " AND id <= %s"
+            params.append(id_max)
+
+        self.cursor.execute(query, tuple(params))
         rows = self.cursor.fetchall()
-        urls = [r[0] for r in rows if r[0]]
+        urls = [(r[0], r[1]) for r in rows if r[1]]
         logging.info(f"Total null listings found: {len(urls)}")
 
-        for idx, url in enumerate(urls):
+        for idx, (row_id, url) in enumerate(urls):
             attempt = 0
             success = False
             last_error = None
