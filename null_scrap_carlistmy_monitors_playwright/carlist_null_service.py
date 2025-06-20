@@ -103,7 +103,7 @@ class CarlistMyNullService:
     def scrape_null_entries(self, id_min=None, id_max=None):
         query = f"""
             SELECT id, listing_url FROM {DB_TABLE_SCRAP}
-            WHERE (brand IS NULL OR model IS NULL OR variant IS NULL
+            WHERE (condition IS NULL brand IS NULL OR model IS NULL OR variant IS NULL
                 OR price IS NULL OR information_ads IS NULL OR location IS NULL)
         """
         params = []
