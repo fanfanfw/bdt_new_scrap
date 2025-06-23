@@ -19,9 +19,7 @@ START_DATE = datetime.now().strftime('%Y%m%d')
 
 # ================== Konfigurasi ENV
 DB_TABLE_SCRAP = os.getenv("DB_TABLE_SCRAP_MUDAH", "url")
-DB_TABLE_PRIMARY = os.getenv("DB_TABLE_PRIMARY_MUDAH", "cars")
 DB_TABLE_HISTORY_PRICE = os.getenv("DB_TABLE_HISTORY_PRICE_MUDAH", "price_history_scrap")
-DB_TABLE_HISTORY_PRICE_COMBINED = os.getenv("DB_TABLE_HISTORY_PRICE_COMBINED_MUDAH", "price_history_combined")
 MUDAHMY_LISTING_URL = os.getenv("MUDAHMY_LISTING_URL", "https://www.mudah.my/malaysia/cars-for-sale")
 
 
@@ -102,7 +100,7 @@ class MudahMyService:
     def init_browser(self):
         self.playwright = sync_playwright().start()
         launch_kwargs = {
-            "headless": True,
+            "headless": False,
             "args": [
                 "--disable-blink-features=AutomationControlled",
                 "--no-sandbox",
@@ -185,7 +183,20 @@ class MudahMyService:
             self.conn.commit()
             result = self.cursor.fetchone()
             if result:
-                logging.info(f"✅ Listing baru {listing_url} berhasil ditambahkan ke database dengan price {price}")
+                # Dapatkan ID dari listing yang baru saja dimasukkan
+                new_id = result[0]
+                
+                # Menambahkan pengisian tanggal untuk kolom information_ads_date
+                today_date = datetime.now().strftime('%Y-%m-%d')
+                update_query = f"""
+                    UPDATE {DB_TABLE_SCRAP}
+                    SET information_ads_date = %s
+                    WHERE id = %s
+                """
+                self.cursor.execute(update_query, (today_date, new_id))
+                self.conn.commit()
+
+                logging.info(f"✅ Listing baru {listing_url} berhasil ditambahkan ke database dengan price {price}, dan information_ads_date diupdate.")
                 return True
             return False
         except Exception as e:
@@ -220,28 +231,42 @@ class MudahMyService:
                     if a_tag:
                         href = a_tag.get_attribute('href')
                         if href:
-                            # Dapatkan harga dari card (pakai logika test_ambil_price_mudahmy.py)
+                            # Dapatkan harga dari card
                             current_price = self.get_price_from_listing(card)
+                            
                             # Cek listing di database
                             self.cursor.execute(
-                                f"SELECT id, price, status FROM {DB_TABLE_SCRAP} WHERE listing_url = %s",
+                                f"""SELECT id, price, 
+                                    (brand IS NULL OR brand = '') AS brand_null,
+                                    (model IS NULL OR model = '') AS model_null,
+                                    (variant IS NULL OR variant = '') AS variant_null,
+                                    (information_ads IS NULL OR information_ads = '') AS info_null,
+                                    (location IS NULL OR location = '') AS location_null
+                                FROM {DB_TABLE_SCRAP} 
+                                WHERE listing_url = %s""",
                                 (href,)
                             )
                             existing = self.cursor.fetchone()
+                            
                             if not existing:
                                 # Listing baru, masukkan ke database dengan status active dan price
                                 if self.insert_new_listing(href, current_price):
                                     urls_to_scrape.append(href)
                                     logging.info(f"Listing baru ditemukan dan ditambahkan: {href} dengan price {current_price}")
                             else:
-                                # Listing sudah ada, cek harga
+                                # Listing sudah ada, cek harga dan field penting
                                 db_price = existing[1] if existing[1] else 0
-                                if current_price != db_price:
-                                    # Harga berbeda, perlu update
+                                has_null_fields = any(existing[2:7])  # Cek field brand_null sampai location_null
+                                
+                                if current_price != db_price or has_null_fields:
+                                    # Harga berbeda atau ada field penting yang null, perlu update
                                     urls_to_scrape.append(href)
-                                    logging.info(f"Harga berubah untuk {href}: {db_price} -> {current_price}")
+                                    if has_null_fields:
+                                        logging.info(f"Listing {href} perlu diupdate karena ada field penting yang masih kosong")
+                                    else:
+                                        logging.info(f"Harga berubah untuk {href}: {db_price} -> {current_price}")
                                 else:
-                                    logging.info(f"Skip listing {href}: harga sama ({current_price})")
+                                    logging.info(f"Skip listing {href}: harga sama ({current_price}) dan data lengkap")
                 except Exception as e:
                     logging.warning(f"❌ Error memproses card: {e}")
                     continue
@@ -700,6 +725,38 @@ class MudahMyService:
         finally:
             self.quit_browser()
 
+    def convert_mileage(self, mileage_str):
+        """Convert mileage string to integer in km"""
+        if not mileage_str or mileage_str == "N/A":
+            return None
+        try:
+            # Handle cases like "<4k"
+            if mileage_str.startswith("<"):
+                return int(mileage_str[1:-1]) * 1000 if "k" in mileage_str else int(mileage_str[1:])
+            
+            # Handle ranges like "10k - 20k"
+            if " - " in mileage_str:
+                parts = mileage_str.split(" - ")
+                max_part = parts[-1]
+                if "k" in max_part:
+                    return int(float(max_part.replace("k", "")) * 1000)
+                return int(max_part)
+                    
+            # Handle ">500k"
+            if mileage_str.startswith(">"):
+                return int(mileage_str[1:-1]) * 1000 if "k" in mileage_str else int(mileage_str[1:])
+                    
+            # Handle normal cases with "k"
+            if "k" in mileage_str:
+                return int(float(mileage_str.replace("k", "")) * 1000)
+                    
+            # Handle pure numbers
+            return int(mileage_str.replace(",", "").replace("km", "").strip())
+            
+        except Exception as e:
+            logging.warning(f"Gagal mengkonversi mileage '{mileage_str}': {e}")
+            return None
+    
     def stop_scraping(self):
         logging.info("Permintaan untuk menghentikan scraping diterima.")
         self.stop_flag = True
@@ -713,35 +770,39 @@ class MudahMyService:
         try:
             # Cek apakah listing_url sudah ada di database
             self.cursor.execute(
-                f"SELECT id, price FROM {DB_TABLE_SCRAP} WHERE listing_url = %s",
+                f"""SELECT id, price, 
+                    (brand IS NULL OR brand = '') AS brand_null,
+                    (model IS NULL OR model = '') AS model_null,
+                    (variant IS NULL OR variant = '') AS variant_null,
+                    (information_ads IS NULL OR information_ads = '') AS info_null,
+                    (location IS NULL OR location = '') AS location_null
+                FROM {DB_TABLE_SCRAP} 
+                WHERE listing_url = %s""",
                 (car_data["listing_url"],)
             )
             row = self.cursor.fetchone()
 
-            # Jika data sudah ada, cek harga
+            # Konversi harga
             price_int = 0
             if car_data.get("price"):
                 match_price = re.sub(r"[^\d]", "", car_data["price"])
                 price_int = int(match_price) if match_price else 0
 
+            # Konversi mileage sebelum menyimpan
+            mileage_str = car_data.get("mileage", "")
+            mileage_conv = self.convert_mileage(mileage_str)
+
+            # Pastikan mileage telah terkonversi dengan benar sebelum disimpan
+            if mileage_conv is None:
+                logging.warning(f"Mileage '{mileage_str}' tidak valid, set ke 0 km.")
+                mileage_conv = 0  # Jika mileage tidak valid, set ke 0
+
             if row:
-                car_id, old_price = row
+                car_id, old_price, *null_fields = row
                 old_price = old_price if old_price else 0
+                has_null_fields = any(null_fields)
 
-                # Cek apakah ada field penting yang masih NULL di database
-                self.cursor.execute(
-                    f"SELECT brand, model, variant, information_ads, location, year, mileage, transmission, seat_capacity, condition, engine_cc, fuel_type FROM {DB_TABLE_SCRAP} WHERE id = %s",
-                    (car_id,)
-                )
-                db_fields = self.cursor.fetchone()
-                needs_update = any(x is None for x in db_fields)
-
-                # Jika harga sama dan semua field sudah terisi, tidak perlu update
-                if old_price == price_int and not needs_update:
-                    logging.info(f"✅ Harga untuk {car_data['listing_url']} sudah sama dan data lengkap, melewatkan scraping.")
-                    return False, car_id
-
-                # Jika harga berbeda, atau ada field penting yang masih NULL, lakukan update data
+                # Selalu update data jika ada field yang null atau data baru lebih lengkap
                 update_query = f"""
                     UPDATE {DB_TABLE_SCRAP}
                     SET brand=%s, model=%s, variant=%s,
@@ -752,6 +813,7 @@ class MudahMyService:
                         fuel_type=%s, images=%s
                     WHERE id=%s
                 """
+                # Simpan mileage_conv langsung di field mileage
                 self.cursor.execute(update_query, (
                     car_data.get("brand"),
                     car_data.get("model"),
@@ -760,16 +822,26 @@ class MudahMyService:
                     car_data.get("location"),
                     price_int,
                     self.convert_year_to_int(car_data.get("year")),
-                    car_data.get("mileage"),
+                    mileage_conv,  # Simpan hasil konversi mileage di field mileage
                     car_data.get("transmission"),
                     car_data.get("seat_capacity"),
                     datetime.now(),
                     car_data.get("condition", "N/A"),
                     car_data.get("engine_cc"),
                     car_data.get("fuel_type"),
-                    json.dumps(car_data.get("gambar", [])),
+                    json.dumps(car_data.get("images", [])),
                     car_id
                 ))
+
+                # Update information_ads_date dengan tanggal hari ini
+                today_date = datetime.now().strftime('%Y-%m-%d')
+                update_date_query = f"""
+                    UPDATE {DB_TABLE_SCRAP}
+                    SET information_ads_date = %s
+                    WHERE id = %s
+                """
+                self.cursor.execute(update_date_query, (today_date, car_id))
+                self.conn.commit()
 
                 # Insert history jika harga berubah
                 if old_price != price_int and old_price != 0:
@@ -779,18 +851,11 @@ class MudahMyService:
                     """
                     self.cursor.execute(insert_history, (car_id, old_price, price_int))
 
-            else:
-                # Convert year string to integer
-                year_str = car_data.get("year", "")
-                year_int = None
-                if year_str:
-                    # Extract first number from string, handle cases like "1995 or older"
-                    year_match = re.search(r'\d{4}', year_str)
-                    if year_match:
-                        year_int = int(year_match.group(0))
-                    logging.info(f"Converting year from '{year_str}' to {year_int}")
+                logging.info(f"✅ Data untuk {car_data['listing_url']} berhasil diupdate dengan ID: {car_id}")
+                return True, car_id
 
-                # Jika listing_url belum ada, insert data baru
+            else:
+                # Untuk insert baru
                 insert_query = f"""
                     INSERT INTO {DB_TABLE_SCRAP}
                         (listing_url, brand, model, variant, information_ads, location,
@@ -810,112 +875,33 @@ class MudahMyService:
                     car_data.get("location"),
                     price_int,
                     self.convert_year_to_int(car_data.get("year")),
-                    car_data.get("mileage"),
+                    mileage_conv,  # Simpan hasil konversi mileage di field mileage
                     car_data.get("transmission"),
                     car_data.get("seat_capacity"),
                     car_data.get("condition", "N/A"),
                     car_data.get("engine_cc"),
                     car_data.get("fuel_type"),
-                    json.dumps(car_data.get("gambar", []))
+                    json.dumps(car_data.get("images", [])),
                 ))
                 car_id = self.cursor.fetchone()[0]
 
-            self.conn.commit()
-            logging.info(f"✅ Data untuk {car_data['listing_url']} berhasil disimpan/diupdate dengan ID: {car_id}")
-            return True, car_id
+                # Update information_ads_date dengan tanggal hari ini
+                today_date = datetime.now().strftime('%Y-%m-%d')
+                update_date_query = f"""
+                    UPDATE {DB_TABLE_SCRAP}
+                    SET information_ads_date = %s
+                    WHERE id = %s
+                """
+                self.cursor.execute(update_date_query, (today_date, car_id))
+                self.conn.commit()
+
+                logging.info(f"✅ Data baru untuk {car_data['listing_url']} berhasil disimpan dengan ID: {car_id}")
+                return True, car_id
 
         except Exception as e:
             self.conn.rollback()
             logging.error(f"❌ Error menyimpan atau memperbarui data ke database: {e}")
             return False, None
-
-    def sync_to_cars(self):
-        """
-        Sinkronisasi data dari {DB_TABLE_SCRAP} ke {DB_TABLE_PRIMARY}, dan sinkronisasi data perubahan harga dari price_history_scrap ke price_history_combined.
-        """
-        logging.info(f"Memulai sinkronisasi data dari {DB_TABLE_SCRAP} ke {DB_TABLE_PRIMARY}...")
-        try:
-            fetch_query = f"SELECT * FROM {DB_TABLE_SCRAP};"
-            self.cursor.execute(fetch_query)
-            rows = self.cursor.fetchall()
-            col_names = [desc[0] for desc in self.cursor.description]
-            idx_url = col_names.index("listing_url")
-
-            for row in rows:
-                listing_url = row[idx_url]
-                check_query = f"SELECT id FROM {DB_TABLE_PRIMARY} WHERE listing_url = %s"
-                self.cursor.execute(check_query, (listing_url,))
-                result = self.cursor.fetchone()
-
-                if result:
-                    update_query = f"""
-                        UPDATE {DB_TABLE_PRIMARY}
-                        SET brand=%s, model=%s, variant=%s, information_ads=%s,
-                            location=%s, price=%s, year=%s, mileage=%s, transmission=%s,
-                            seat_capacity=%s, gambar=%s, last_scraped_at=%s, condition=%s
-                        WHERE listing_url=%s
-                    """
-                    self.cursor.execute(update_query, (
-                        row[col_names.index("brand")],
-                        row[col_names.index("model")],
-                        row[col_names.index("variant")],
-                        row[col_names.index("information_ads")],
-                        row[col_names.index("location")],
-                        row[col_names.index("price")],
-                        row[col_names.index("year")],
-                        row[col_names.index("mileage")],
-                        row[col_names.index("transmission")],
-                        row[col_names.index("seat_capacity")],
-                        row[col_names.index("gambar")],
-                        row[col_names.index("last_scraped_at")],
-                        row[col_names.index("condition")],
-                        listing_url
-                    ))
-                else:
-                    insert_query = f"""
-                        INSERT INTO {DB_TABLE_PRIMARY}
-                            (listing_url, brand, model, variant, information_ads, location,
-                             price, year, mileage, transmission, seat_capacity, gambar, 
-                             last_scraped_at, condition)
-                        VALUES
-                            (%s, %s, %s, %s, %s, %s,
-                             %s, %s, %s, %s, %s, %s, %s, %s)
-                    """
-                    self.cursor.execute(insert_query, (
-                        listing_url,
-                        row[col_names.index("brand")],
-                        row[col_names.index("model")],
-                        row[col_names.index("variant")],
-                        row[col_names.index("information_ads")],
-                        row[col_names.index("location")],
-                        row[col_names.index("price")],
-                        row[col_names.index("year")],
-                        row[col_names.index("mileage")],
-                        row[col_names.index("transmission")],
-                        row[col_names.index("seat_capacity")],
-                        row[col_names.index("gambar")],
-                        row[col_names.index("last_scraped_at")],
-                        row[col_names.index("condition")]
-                    ))
-
-            # Sinkronisasi perubahan harga dari price_history_scrap ke price_history_combined
-            sync_price_history_query = f"""
-                INSERT INTO {DB_TABLE_HISTORY_PRICE_COMBINED} (car_id, car_scrap_id, old_price, new_price, changed_at)
-                SELECT c.id, cs.id, phs.old_price, phs.new_price, phs.changed_at
-                FROM {DB_TABLE_HISTORY_PRICE} phs
-                JOIN {DB_TABLE_SCRAP} cs ON phs.car_id = cs.id
-                JOIN {DB_TABLE_PRIMARY} c ON cs.listing_url = c.listing_url
-                WHERE phs.car_id IS NOT NULL;
-            """
-            self.cursor.execute(sync_price_history_query)
-
-            # Commit perubahan ke database
-            self.conn.commit()
-            logging.info(f"Sinkronisasi data dari {DB_TABLE_SCRAP} ke {DB_TABLE_PRIMARY} selesai.")
-            logging.info("Sinkronisasi perubahan harga dari price_history_scrap ke price_history_combined selesai.")
-        except Exception as e:
-            self.conn.rollback()
-            logging.error(f"Error saat sinkronisasi data: {e}")
 
     def export_data(self):
         """
