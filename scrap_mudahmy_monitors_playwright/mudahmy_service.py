@@ -241,7 +241,8 @@ class MudahMyService:
                                     (model IS NULL OR model = '') AS model_null,
                                     (variant IS NULL OR variant = '') AS variant_null,
                                     (information_ads IS NULL OR information_ads = '') AS info_null,
-                                    (location IS NULL OR location = '') AS location_null
+                                    (location IS NULL OR location = '') AS location_null,
+                                    images
                                 FROM {DB_TABLE_SCRAP} 
                                 WHERE listing_url = %s""",
                                 (href,)
@@ -254,19 +255,32 @@ class MudahMyService:
                                     urls_to_scrape.append(href)
                                     logging.info(f"Listing baru ditemukan dan ditambahkan: {href} dengan price {current_price}")
                             else:
-                                # Listing sudah ada, cek harga dan field penting
+                                # Listing sudah ada, cek harga, field penting, dan images
                                 db_price = existing[1] if existing[1] else 0
                                 has_null_fields = any(existing[2:7])  # Cek field brand_null sampai location_null
+                                images_field = existing[7]
+                                images_empty = False
+                                try:
+                                    if images_field is None:
+                                        images_empty = True
+                                    elif isinstance(images_field, str):
+                                        images_empty = images_field.strip() in ('[]', '', 'null')
+                                    elif isinstance(images_field, (list, tuple)):
+                                        images_empty = len(images_field) == 0
+                                except Exception:
+                                    images_empty = False
                                 
-                                if current_price != db_price or has_null_fields:
-                                    # Harga berbeda atau ada field penting yang null, perlu update
+                                if current_price != db_price or has_null_fields or images_empty:
+                                    # Harga berbeda, ada field penting null, atau images kosong, perlu update
                                     urls_to_scrape.append(href)
                                     if has_null_fields:
                                         logging.info(f"Listing {href} perlu diupdate karena ada field penting yang masih kosong")
+                                    elif images_empty:
+                                        logging.info(f"Listing {href} perlu diupdate karena field images kosong")
                                     else:
                                         logging.info(f"Harga berubah untuk {href}: {db_price} -> {current_price}")
                                 else:
-                                    logging.info(f"Skip listing {href}: harga sama ({current_price}) dan data lengkap")
+                                    logging.info(f"Skip listing {href}: harga sama ({current_price}), data lengkap, dan images sudah ada")
                 except Exception as e:
                     logging.warning(f"❌ Error memproses card: {e}")
                     continue
