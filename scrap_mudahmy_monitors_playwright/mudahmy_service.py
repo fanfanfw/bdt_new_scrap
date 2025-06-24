@@ -897,7 +897,12 @@ class MudahMyService:
                     car_data.get("fuel_type"),
                     json.dumps(car_data.get("images", [])),
                 ))
-                car_id = self.cursor.fetchone()[0]
+                result = self.cursor.fetchone()
+                if result is not None:
+                    car_id = result[0]
+                else:
+                    logging.error("Gagal insert data: tidak ada ID yang dikembalikan dari database.")
+                    return False, None
 
                 # Update information_ads_date dengan tanggal hari ini
                 today_date = datetime.now().strftime('%Y-%m-%d')
@@ -925,7 +930,11 @@ class MudahMyService:
             query = f"SELECT * FROM {DB_TABLE_SCRAP};"
             self.cursor.execute(query)
             rows = self.cursor.fetchall()
-            columns = [desc[0] for desc in self.cursor.description]
+            if self.cursor.description is not None:
+                columns = [desc[0] for desc in self.cursor.description]
+            else:
+                logging.error("Gagal mengambil kolom: cursor.description bernilai None.")
+                return []
             data = [dict(zip(columns, row)) for row in rows]
             return data
         except Exception as e:
