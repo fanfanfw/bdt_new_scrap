@@ -21,9 +21,7 @@ START_DATE = datetime.now().strftime('%Y%m%d')
 
 # ===== Konfigurasi Env
 DB_TABLE_SCRAP = os.getenv("DB_TABLE_SCRAP_CARLIST", "cars_scrap_new")
-DB_TABLE_PRIMARY = os.getenv("DB_TABLE_PRIMARY_CARLIST", "cars")
 DB_TABLE_HISTORY_PRICE = os.getenv("DB_TABLE_HISTORY_PRICE_CARLIST", "price_history")
-DB_TABLE_HISTORY_PRICE_COMBINED = os.getenv("DB_TABLE_HISTORY_PRICE_COMBINED_CARLIST", "price_history_combined")
 
 USE_PROXY = os.getenv("USE_PROXY_OXYLABS", "false").lower() == "true"
 PROXY_SERVER = os.getenv("PROXY_SERVER")
@@ -80,6 +78,27 @@ def get_custom_proxy_list():
             logging.warning(f"Format proxy tidak valid: {p}")
     return parsed
 
+def parse_mileage(mileage_str):
+    if not mileage_str or mileage_str.strip() == "- km":
+        return 0
+    try:
+        # Cek rentang, ambil nilai kanan
+        if "-" in mileage_str:
+            right = mileage_str.split("-")[-1].strip()
+        else:
+            right = mileage_str.strip()
+        # Hilangkan 'km' dan spasi
+        right = right.replace("km", "").replace("KM", "").replace("Km", "").strip()
+        # Ganti K/k dengan ribuan
+        right = right.replace("K", "000").replace("k", "000")
+        # Hilangkan spasi sisa
+        right = right.replace(" ", "")
+        # Ambil angka saja
+        mileage_int = int(re.sub(r"[^\d]", "", right))
+        return mileage_int
+    except Exception:
+        return 0
+
 class CarlistMyService:
     def __init__(self, download_images_locally=True):
         self.download_images_locally = download_images_locally
@@ -121,7 +140,7 @@ class CarlistMyService:
         self.playwright = sync_playwright().start()
 
         launch_kwargs = {
-            "headless": True,
+            "headless": False,
             "args": [
                 "--disable-blink-features=AutomationControlled",
                 "--no-sandbox",
@@ -304,6 +323,9 @@ class CarlistMyService:
                 price = int(re.sub(r"[^\d]", "", price_string)) if price_string else 0
                 year_int = int(re.search(r"\d{4}", year).group()) if year else 0
 
+                # Konversi mileage ke integer sesuai format
+                mileage_int = parse_mileage(mileage)
+
                 return {
                     "listing_url": url,
                     "brand": brand,
@@ -315,12 +337,13 @@ class CarlistMyService:
                     "condition": condition,
                     "price": price,
                     "year": year_int,
-                    "mileage": mileage,
+                    "mileage": mileage_int,
                     "transmission": transmission,
                     "seat_capacity": seat_capacity,
                     "image": image,
                     "engine_cc": engine_cc,
                     "fuel_type": fuel_type,
+                    "information_ads_date": datetime.now().strftime("%Y-%m-%d"),
                 }
 
             except Exception as e:
@@ -364,6 +387,7 @@ class CarlistMyService:
             model_group = (car.get("model_group") or "NO MODEL_GROUP").upper()
             model = (car.get("model") or "unknown").upper()
             variant = (car.get("variant") or "NO VARIANT").upper()
+            information_ads_date = car.get("information_ads_date")
             car_id = None
 
             if row:
@@ -375,26 +399,26 @@ class CarlistMyService:
                     SET brand=%s, model_group=%s, model=%s, variant=%s, information_ads=%s,
                         location=%s, condition=%s, price=%s, year=%s, mileage=%s,
                         transmission=%s, seat_capacity=%s, engine_cc=%s, fuel_type=%s,
-                        last_scraped_at=%s, images=%s
+                        last_scraped_at=%s, images=%s, information_ads_date=%s
                     WHERE id=%s
                 """, (
                     brand, model_group, model, variant, car.get("information_ads"),
                     car.get("location"), car.get("condition"),car.get("price"), car.get("year"), car.get("mileage"),
                     car.get("transmission"), car.get("seat_capacity"), car.get("engine_cc"), car.get("fuel_type"),
-                    now, image_urls_str, car_id
+                    now, image_urls_str, information_ads_date, car_id
                 ))
             else:
                 self.cursor.execute(f"""
                     INSERT INTO {DB_TABLE_SCRAP} (
                         listing_url, brand, model_group, model, variant, information_ads, location, condition,
-                        price, year, mileage, transmission, seat_capacity, engine_cc, fuel_type, version, images
-                    ) VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
+                        price, year, mileage, transmission, seat_capacity, engine_cc, fuel_type, version, images, information_ads_date
+                    ) VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
                     RETURNING id
                 """, (
                     car["listing_url"], brand, model_group, model, variant,
                     car.get("information_ads"), car.get("location"), car.get("condition"),car.get("price"),
                     car.get("year"), car.get("mileage"), car.get("transmission"),
-                    car.get("seat_capacity"), car.get("engine_cc"), car.get("fuel_type"), 1, image_urls_str
+                    car.get("seat_capacity"), car.get("engine_cc"), car.get("fuel_type"), 1, image_urls_str, information_ads_date
                 ))
                 car_id = self.cursor.fetchone()[0]
                 if self.download_images_locally:
@@ -490,7 +514,7 @@ class CarlistMyService:
                 skip_count += 1
                 continue
 
-            self.cursor.execute(f"SELECT id, price, version FROM {DB_TABLE_SCRAP} WHERE listing_url = %s", (url,))
+            self.cursor.execute(f"SELECT id, price, version, images FROM {DB_TABLE_SCRAP} WHERE listing_url = %s", (url,))
             result = self.cursor.fetchone()
 
             if not result:
@@ -504,8 +528,13 @@ class CarlistMyService:
                     self.conn.rollback()
                     logging.error(f"Gagal insert awal listing_url: {url}, error: {e}")
             else:
-                db_id, old_price, old_version = result
-                if price != old_price and old_price is not None:
+                db_id, old_price, old_version, images_str = result
+                # Cek jika harga sama dan images kosong, scrape ulang
+                if price == old_price and (images_str == '[]' or images_str is None):
+                    logging.info(f"UPDATE: {url} | price sama, images kosong, akan di-scrape ulang dan update data")
+                    urls_to_scrape.append(url)
+                    insert_update_count += 1
+                elif price != old_price and old_price is not None:
                     try:
                         new_version = (old_version or 1) + 1
                         self.cursor.execute(f"UPDATE {DB_TABLE_SCRAP} SET price=%s, version=%s WHERE id=%s", (price, new_version, db_id))
@@ -547,92 +576,6 @@ class CarlistMyService:
 
         self.quit_browser()
         logging.info("✅ Proses scraping selesai.")
-
-    def sync_to_cars(self):
-        """
-        Sinkronisasi data dari {DB_TABLE_SCRAP} ke {DB_TABLE_PRIMARY}, d
-        an sinkronisasi perubahan harga dari price_history ke price_history_combined.
-        """
-        logging.info(f"Memulai sinkronisasi data dari {DB_TABLE_SCRAP} ke {DB_TABLE_PRIMARY}...")
-        try:
-            fetch_query = f"SELECT * FROM {DB_TABLE_SCRAP};"
-            self.cursor.execute(fetch_query)
-            rows = self.cursor.fetchall()
-            col_names = [desc[0] for desc in self.cursor.description]
-            idx_url = col_names.index("listing_url")
-
-            for row in rows:
-                listing_url = row[idx_url]
-                check_query = f"SELECT id FROM {DB_TABLE_PRIMARY} WHERE listing_url = %s"
-                self.cursor.execute(check_query, (listing_url,))
-                result = self.cursor.fetchone()
-
-                if result:
-                    update_query = f"""
-                        UPDATE {DB_TABLE_PRIMARY}
-                        SET brand=%s, model=%s, variant=%s, information_ads=%s,
-                            location=%s, condition=%s,price=%s, year=%s, mileage=%s, transmission=%s,
-                            seat_capacity=%s, image=%s, last_scraped_at=%s
-                        WHERE listing_url=%s
-                    """
-                    self.cursor.execute(update_query, (
-                        row[col_names.index("brand")],
-                        row[col_names.index("model")],
-                        row[col_names.index("variant")],
-                        row[col_names.index("information_ads")],
-                        row[col_names.index("location")],
-                        row[col_names.index("condition")],
-                        row[col_names.index("price")],
-                        row[col_names.index("year")],
-                        row[col_names.index("mileage")],
-                        row[col_names.index("transmission")],
-                        row[col_names.index("seat_capacity")],
-                        row[col_names.index("image")],
-                        row[col_names.index("last_scraped_at")],
-                        listing_url
-                    ))
-                else:
-                    insert_query = f"""
-                        INSERT INTO {DB_TABLE_PRIMARY}
-                            (listing_url, brand, model, variant, information_ads, location, condition,
-                             price, year, mileage, transmission, seat_capacity, image, last_scraped_at)
-                        VALUES
-                            (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
-                    """
-                    self.cursor.execute(insert_query, (
-                        listing_url,
-                        row[col_names.index("brand")],
-                        row[col_names.index("model")],
-                        row[col_names.index("variant")],
-                        row[col_names.index("information_ads")],
-                        row[col_names.index("location")],
-                        row[col_names.index("condition")],
-                        row[col_names.index("price")],
-                        row[col_names.index("year")],
-                        row[col_names.index("mileage")],
-                        row[col_names.index("transmission")],
-                        row[col_names.index("seat_capacity")],
-                        row[col_names.index("image")],
-                        row[col_names.index("last_scraped_at")]
-                    ))
-
-            # Sinkronisasi perubahan harga dari price_history ke price_history_combined
-            sync_price_history_query = f"""
-                INSERT INTO {DB_TABLE_HISTORY_PRICE_COMBINED} (car_id, car_scrap_id, old_price, new_price, changed_at)
-                SELECT c.id, cs.id, ph.old_price, ph.new_price, ph.changed_at
-                FROM {DB_TABLE_HISTORY_PRICE} ph
-                JOIN {DB_TABLE_SCRAP} cs ON ph.car_id = cs.id
-                JOIN {DB_TABLE_PRIMARY} c ON cs.listing_url = c.listing_url
-                WHERE ph.car_id IS NOT NULL;
-            """
-            self.cursor.execute(sync_price_history_query)
-
-            self.conn.commit()
-            logging.info(f"Sinkronisasi data dari {DB_TABLE_SCRAP} ke {DB_TABLE_PRIMARY} selesai.")
-            logging.info("Sinkronisasi perubahan harga dari price_history ke price_history_combined selesai.")
-        except Exception as e:
-            self.conn.rollback()
-            logging.error(f"Error saat sinkronisasi data: {e}")
 
     def export_data(self):
         try:
