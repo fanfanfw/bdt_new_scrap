@@ -680,7 +680,7 @@ class MudahMyNullService:
                     car_data.get("location"),
                     price_int,
                     self.convert_year_to_int(car_data.get("year")),
-                    car_data.get("mileage"),
+                    parse_mileage_mudah(car_data.get("mileage")),
                     car_data.get("transmission"),
                     car_data.get("seat_capacity"),
                     datetime.now(),
@@ -730,7 +730,7 @@ class MudahMyNullService:
                     car_data.get("location"),
                     price_int,
                     self.convert_year_to_int(car_data.get("year")),
-                    car_data.get("mileage"),
+                    parse_mileage_mudah(car_data.get("mileage")),
                     car_data.get("transmission"),
                     car_data.get("seat_capacity"),
                     car_data.get("condition", "N/A"),
@@ -913,3 +913,22 @@ class MudahMyNullService:
             logging.info(f"Converting year from '{year_str}' to {year_int}")
             return year_int
         return None
+
+def parse_mileage_mudah(mileage_str):
+    if not mileage_str:
+        return 0
+    try:
+        # Ambil angka terbesar dari rentang, atau satu angka
+        if "-" in mileage_str:
+            right = mileage_str.split("-")[-1].strip()
+        else:
+            right = mileage_str.strip("<> ").strip()
+        # Hilangkan 'km', spasi, dan lowercase
+        right = right.lower().replace("km", "").replace(" ", "")
+        # Ganti k dengan 000
+        right = right.replace("k", "000")
+        # Ambil angka saja
+        mileage_int = int(re.sub(r"[^\d]", "", right))
+        return mileage_int
+    except Exception:
+        return 0
