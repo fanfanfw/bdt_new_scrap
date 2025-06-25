@@ -538,7 +538,7 @@ class CarlistMyService:
                     try:
                         new_version = (old_version or 1) + 1
                         self.cursor.execute(f"UPDATE {DB_TABLE_SCRAP} SET price=%s, version=%s WHERE id=%s", (price, new_version, db_id))
-                        self.cursor.execute(f"INSERT INTO {DB_TABLE_HISTORY_PRICE} (car_id, old_price, new_price) VALUES (%s, %s, %s)", (db_id, old_price, price))
+                        self.cursor.execute(f"INSERT INTO {DB_TABLE_HISTORY_PRICE} (listing_url, old_price, new_price) VALUES (%s, %s, %s)", (url, old_price, price))
                         self.conn.commit()
                         logging.info(f"UPDATE: {url} | price changed {old_price} -> {price} | version: {new_version}")
                         urls_to_scrape.append(url)
