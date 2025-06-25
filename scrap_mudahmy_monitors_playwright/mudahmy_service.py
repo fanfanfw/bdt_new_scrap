@@ -860,10 +860,10 @@ class MudahMyService:
                 # Insert history jika harga berubah
                 if old_price != price_int and old_price != 0:
                     insert_history = f"""
-                        INSERT INTO {DB_TABLE_HISTORY_PRICE} (car_id, old_price, new_price)
+                        INSERT INTO {DB_TABLE_HISTORY_PRICE} (listing_url, old_price, new_price)
                         VALUES (%s, %s, %s)
                     """
-                    self.cursor.execute(insert_history, (car_id, old_price, price_int))
+                    self.cursor.execute(insert_history, (car_data["listing_url"], old_price, price_int))
 
                 logging.info(f"✅ Data untuk {car_data['listing_url']} berhasil diupdate dengan ID: {car_id}")
                 return True, car_id
