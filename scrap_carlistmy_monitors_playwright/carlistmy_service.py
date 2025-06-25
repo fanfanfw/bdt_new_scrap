@@ -343,7 +343,6 @@ class CarlistMyService:
                     "image": image,
                     "engine_cc": engine_cc,
                     "fuel_type": fuel_type,
-                    "information_ads_date": datetime.now().strftime("%Y-%m-%d"),
                 }
 
             except Exception as e:
@@ -378,7 +377,7 @@ class CarlistMyService:
 
     def save_to_db(self, car):
         try:
-            self.cursor.execute(f"SELECT id, price, version FROM {DB_TABLE_SCRAP} WHERE listing_url = %s", (car["listing_url"],))
+            self.cursor.execute(f"SELECT id, price, version, information_ads_date FROM {DB_TABLE_SCRAP} WHERE listing_url = %s", (car["listing_url"],))
             row = self.cursor.fetchone()
             now = datetime.now()
             image_urls = car.get("image") or []
@@ -387,13 +386,15 @@ class CarlistMyService:
             model_group = (car.get("model_group") or "NO MODEL_GROUP").upper()
             model = (car.get("model") or "unknown").upper()
             variant = (car.get("variant") or "NO VARIANT").upper()
-            information_ads_date = car.get("information_ads_date")
             car_id = None
 
             if row:
-                car_id, old_price, version = row
+                car_id, old_price, version, existing_ads_date = row
                 if self.download_images_locally:
                     self.download_images(image_urls, brand, model, variant, car_id)
+                
+                ads_date_to_use = existing_ads_date or now.strftime("%Y-%m-%d")
+                
                 self.cursor.execute(f"""
                     UPDATE {DB_TABLE_SCRAP}
                     SET brand=%s, model_group=%s, model=%s, variant=%s, information_ads=%s,
@@ -403,11 +404,12 @@ class CarlistMyService:
                     WHERE id=%s
                 """, (
                     brand, model_group, model, variant, car.get("information_ads"),
-                    car.get("location"), car.get("condition"),car.get("price"), car.get("year"), car.get("mileage"),
+                    car.get("location"), car.get("condition"), car.get("price"), car.get("year"), car.get("mileage"),
                     car.get("transmission"), car.get("seat_capacity"), car.get("engine_cc"), car.get("fuel_type"),
-                    now, image_urls_str, information_ads_date, car_id
+                    now, image_urls_str, ads_date_to_use, car_id
                 ))
             else:
+                current_date = now.strftime("%Y-%m-%d")
                 self.cursor.execute(f"""
                     INSERT INTO {DB_TABLE_SCRAP} (
                         listing_url, brand, model_group, model, variant, information_ads, location, condition,
@@ -416,9 +418,9 @@ class CarlistMyService:
                     RETURNING id
                 """, (
                     car["listing_url"], brand, model_group, model, variant,
-                    car.get("information_ads"), car.get("location"), car.get("condition"),car.get("price"),
+                    car.get("information_ads"), car.get("location"), car.get("condition"), car.get("price"),
                     car.get("year"), car.get("mileage"), car.get("transmission"),
-                    car.get("seat_capacity"), car.get("engine_cc"), car.get("fuel_type"), 1, image_urls_str, information_ads_date
+                    car.get("seat_capacity"), car.get("engine_cc"), car.get("fuel_type"), 1, image_urls_str, current_date
                 ))
                 car_id = self.cursor.fetchone()[0]
                 if self.download_images_locally:
@@ -506,6 +508,8 @@ class CarlistMyService:
         skip_count = 0
 
         urls_to_scrape = []
+        current_date = datetime.now().strftime("%Y-%m-%d")  # Tanggal saat ini untuk information_ads_date
+        
         for url, ads_tag, price in url_tag_price_list:
             if self.stop_flag:
                 break
@@ -519,9 +523,12 @@ class CarlistMyService:
 
             if not result:
                 try:
-                    self.cursor.execute(f"INSERT INTO {DB_TABLE_SCRAP} (listing_url, price, ads_tag, version) VALUES (%s, %s, %s, %s)", (url, price, ads_tag, 1))
+                    self.cursor.execute(f"""
+                        INSERT INTO {DB_TABLE_SCRAP} (listing_url, price, ads_tag, version, information_ads_date) 
+                        VALUES (%s, %s, %s, %s, %s)
+                    """, (url, price, ads_tag, 1, current_date))
                     self.conn.commit()
-                    logging.info(f"INSERT: {url} | price: {price} | ads_tag: {ads_tag} | version: 1")
+                    logging.info(f"INSERT: {url} | price: {price} | ads_tag: {ads_tag} | version: 1 | ads_date: {current_date}")
                     urls_to_scrape.append(url)
                     insert_update_count += 1
                 except Exception as e:
@@ -537,6 +544,7 @@ class CarlistMyService:
                 elif price != old_price and old_price is not None:
                     try:
                         new_version = (old_version or 1) + 1
+                        # Update price dan version, tapi JANGAN ubah information_ads_date
                         self.cursor.execute(f"UPDATE {DB_TABLE_SCRAP} SET price=%s, version=%s WHERE id=%s", (price, new_version, db_id))
                         self.cursor.execute(f"INSERT INTO {DB_TABLE_HISTORY_PRICE} (listing_url, old_price, new_price) VALUES (%s, %s, %s)", (url, old_price, price))
                         self.conn.commit()
