@@ -55,6 +55,27 @@ def parse_custom_proxies():
                 logging.warning(f"Invalid proxy format: {p}")
     return proxies
 
+def parse_mileage(mileage_str):
+    if not mileage_str or mileage_str.strip() == "- km":
+        return 0
+    try:
+        # Cek rentang, ambil nilai kanan
+        if "-" in mileage_str:
+            right = mileage_str.split("-")[-1].strip()
+        else:
+            right = mileage_str.strip()
+        # Hilangkan 'km' dan spasi
+        right = right.replace("km", "").replace("KM", "").replace("Km", "").strip()
+        # Ganti K/k dengan ribuan
+        right = right.replace("K", "000").replace("k", "000")
+        # Hilangkan spasi sisa
+        right = right.replace(" ", "")
+        # Ambil angka saja
+        mileage_int = int(re.sub(r"[^\d]", "", right))
+        return mileage_int
+    except Exception:
+        return 0
+
 class CarlistMyNullService:
     def __init__(self, download_images_locally=True):
         self.conn = get_connection()
@@ -246,6 +267,8 @@ class CarlistMyNullService:
 
         price = int(re.sub(r"[^\d]", "", price_string)) if price_string else 0
         year_int = int(re.search(r"\d{4}", year).group()) if year else 0
+        # Konversi mileage ke integer
+        mileage_int = parse_mileage(mileage)
 
         return {
             "listing_url": url,
@@ -258,7 +281,7 @@ class CarlistMyNullService:
             "condition": condition,
             "price": price,
             "year": year_int,
-            "mileage": mileage,
+            "mileage": mileage_int,
             "transmission": transmission,
             "seat_capacity": seat_capacity,
             "engine_cc": engine_cc,
@@ -320,9 +343,9 @@ class CarlistMyNullService:
 
                 if car["price"] != old_price:
                     self.cursor.execute(f"""
-                        INSERT INTO {DB_TABLE_HISTORY_PRICE} (car_id, old_price, new_price)
+                        INSERT INTO {DB_TABLE_HISTORY_PRICE} (listing_url, old_price, new_price)
                         VALUES (%s, %s, %s)
-                    """, (car_id, old_price, car["price"]))
+                    """, (car["listing_url"], old_price, car["price"]))
 
             else:
                 self.cursor.execute(f"""
