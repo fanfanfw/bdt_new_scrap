@@ -780,6 +780,30 @@ class MudahMyService:
         self.listing_count = 0
         logging.info("Scraping direset.")
 
+    def normalize_brand_name(self, brand_str):
+        """Normalize brand name by replacing dashes with spaces and cleaning up format."""
+        if not brand_str or brand_str == "N/A":
+            return brand_str
+        
+        try:
+            # Replace dash with space and clean up
+            normalized = (
+                brand_str.replace('-', ' ')  # Replace dash with space
+                .replace('_', ' ')           # Replace underscore with space (jika ada)
+                .strip()                     # Remove leading/trailing spaces
+                .upper()                     # Convert to uppercase for consistency
+            )
+            
+            # Remove multiple spaces and replace with single space
+            normalized = ' '.join(normalized.split())
+            
+            logging.info(f"Brand normalized: '{brand_str}' -> '{normalized}'")
+            return normalized
+            
+        except Exception as e:
+            logging.warning(f"Error normalizing brand '{brand_str}': {e}")
+            return brand_str
+
     def save_to_db(self, car_data):
         try:
             # Cek apakah listing_url sudah ada di database
@@ -811,6 +835,9 @@ class MudahMyService:
                 logging.warning(f"Mileage '{mileage_str}' tidak valid, set ke 0 km.")
                 mileage_conv = 0  # Jika mileage tidak valid, set ke 0
 
+            # ===== TAMBAHAN: Normalize brand name =====
+            normalized_brand = self.normalize_brand_name(car_data.get("brand"))
+            
             if row:
                 car_id, old_price, *null_fields = row
                 old_price = old_price if old_price else 0
@@ -827,16 +854,16 @@ class MudahMyService:
                         fuel_type=%s, images=%s
                     WHERE id=%s
                 """
-                # Simpan mileage_conv langsung di field mileage
+                # Gunakan normalized_brand instead of car_data.get("brand")
                 self.cursor.execute(update_query, (
-                    car_data.get("brand"),
+                    normalized_brand,  # <-- PERUBAHAN DI SINI
                     car_data.get("model"),
                     car_data.get("variant"),
                     car_data.get("information_ads"),
                     car_data.get("location"),
                     price_int,
                     self.convert_year_to_int(car_data.get("year")),
-                    mileage_conv,  # Simpan hasil konversi mileage di field mileage
+                    mileage_conv,
                     car_data.get("transmission"),
                     car_data.get("seat_capacity"),
                     datetime.now(),
@@ -880,16 +907,17 @@ class MudahMyService:
                         %s, %s, %s, %s, %s, %s, %s, %s, %s)
                     RETURNING id
                 """
+                # Gunakan normalized_brand instead of car_data.get("brand")
                 self.cursor.execute(insert_query, (
                     car_data["listing_url"],
-                    car_data.get("brand"),
+                    normalized_brand,  # <-- PERUBAHAN DI SINI
                     car_data.get("model"),
                     car_data.get("variant"),
                     car_data.get("information_ads"),
                     car_data.get("location"),
                     price_int,
                     self.convert_year_to_int(car_data.get("year")),
-                    mileage_conv,  # Simpan hasil konversi mileage di field mileage
+                    mileage_conv,
                     car_data.get("transmission"),
                     car_data.get("seat_capacity"),
                     car_data.get("condition", "N/A"),

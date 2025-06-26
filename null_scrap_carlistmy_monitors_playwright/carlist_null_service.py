@@ -209,7 +209,7 @@ class CarlistMyNullService:
             brand, model_group, model, variant = relevant_spans[0].text.strip(), relevant_spans[1].text.strip(), relevant_spans[2].text.strip(), relevant_spans[3].text.strip()
 
         # Default (sama seperti di carlistmy_service.py)
-        brand = (brand or "UNKNOWN").upper()
+        brand = (brand or "UNKNOWN").upper().replace("-", " ")
         model = (model or "UNKNOWN").upper()
         variant = (variant or "NO VARIANT").upper()
         model_group = (model_group or "NO MODEL_GROUP").upper()
@@ -315,7 +315,7 @@ class CarlistMyNullService:
             image_str = json.dumps(car.get("image") or [])
 
             # LOGIKA PENYESUAIAN FIELD
-            brand = (car.get("brand") or "UNKNOWN").upper()
+            brand = (car.get("brand") or "unknown").upper().replace("-", " ")
             model_group = (car.get("model_group") or "NO MODEL_GROUP").upper()
             model = (car.get("model") or "UNKNOWN").upper()
             variant = (car.get("variant") or "NO VARIANT").upper()

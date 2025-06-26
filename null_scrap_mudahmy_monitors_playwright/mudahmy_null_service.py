@@ -627,8 +627,31 @@ class MudahMyNullService:
         self.listing_count = 0
         logging.info("Scraping direset.")
 
+    def normalize_brand_name(self, brand_str):
+        """
+        Normalisasi nama brand dengan mengganti tanda '-' menjadi spasi
+        dan membersihkan format lainnya.
+        """
+        if not brand_str or brand_str == "N/A":
+            return brand_str
+        
+        # Ganti tanda '-' dengan spasi
+        normalized = brand_str.replace('-', ' ')
+        
+        # Bersihkan spasi berlebih dan uppercase
+        normalized = ' '.join(normalized.split()).upper()
+        
+        return normalized
+
     def save_to_db(self, car_data):
         try:
+            # Normalisasi brand name sebelum menyimpan
+            original_brand = car_data.get("brand")
+            normalized_brand = self.normalize_brand_name(original_brand)
+            
+            if original_brand != normalized_brand:
+                logging.info(f"Brand dinormalisasi dari '{original_brand}' menjadi '{normalized_brand}'")
+            
             # Cek apakah listing_url sudah ada di database
             self.cursor.execute(
                 f"SELECT id, price FROM {DB_TABLE_SCRAP} WHERE listing_url = %s",
@@ -662,6 +685,7 @@ class MudahMyNullService:
                 if old_price == price_int and not needs_update and cur_condition != "URGENT":
                     logging.info(f"✅ Harga dan data sudah lengkap dan bukan URGENT, melewatkan scraping.")
                     return False, car_id
+                
                 update_query = f"""
                     UPDATE {DB_TABLE_SCRAP}
                     SET brand=%s, model=%s, variant=%s,
@@ -673,7 +697,7 @@ class MudahMyNullService:
                     WHERE id=%s
                 """
                 self.cursor.execute(update_query, (
-                    car_data.get("brand"),
+                    normalized_brand,  # Gunakan brand yang sudah dinormalisasi
                     car_data.get("model"),
                     car_data.get("variant"),
                     car_data.get("information_ads"),
@@ -687,7 +711,7 @@ class MudahMyNullService:
                     car_data.get("condition", "N/A"),
                     car_data.get("engine_cc"),
                     car_data.get("fuel_type"),
-                    json.dumps(car_data.get("gambar", [])),
+                    json.dumps(car_data.get("images", [])),  # Perbaikan typo 'gambar' -> 'images'
                     car_id
                 ))
 
@@ -700,16 +724,6 @@ class MudahMyNullService:
                     self.cursor.execute(insert_history, (car_data["listing_url"], old_price, price_int))
 
             else:
-                # Convert year string to integer
-                year_str = car_data.get("year", "")
-                year_int = None
-                if year_str:
-                    # Extract first number from string, handle cases like "1995 or older"
-                    year_match = re.search(r'\d{4}', year_str)
-                    if year_match:
-                        year_int = int(year_match.group(0))
-                    logging.info(f"Converting year from '{year_str}' to {year_int}")
-
                 # Jika listing_url belum ada, insert data baru
                 insert_query = f"""
                     INSERT INTO {DB_TABLE_SCRAP}
@@ -723,7 +737,7 @@ class MudahMyNullService:
                 """
                 self.cursor.execute(insert_query, (
                     car_data["listing_url"],
-                    car_data.get("brand"),
+                    normalized_brand,  # Gunakan brand yang sudah dinormalisasi
                     car_data.get("model"),
                     car_data.get("variant"),
                     car_data.get("information_ads"),
@@ -736,7 +750,7 @@ class MudahMyNullService:
                     car_data.get("condition", "N/A"),
                     car_data.get("engine_cc"),
                     car_data.get("fuel_type"),
-                    json.dumps(car_data.get("gambar", []))
+                    json.dumps(car_data.get("images", []))  # Perbaikan typo 'gambar' -> 'images'
                 ))
                 car_id = self.cursor.fetchone()[0]
 

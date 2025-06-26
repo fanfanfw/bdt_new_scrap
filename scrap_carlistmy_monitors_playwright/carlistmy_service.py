@@ -287,7 +287,7 @@ class CarlistMyService:
                 elif len(relevant_spans) == 4:
                     brand, model_group, model, variant = relevant_spans[0].text.strip(), relevant_spans[1].text.strip(), relevant_spans[2].text.strip(), relevant_spans[3].text.strip()
 
-                brand = (brand or "UNKNOWN").upper()
+                brand = (brand or "UNKNOWN").upper().replace("-", " ")
                 model = (model or "UNKNOWN").upper()
                 variant = (variant or "NO VARIANT").upper()
                 model_group = (model_group or "NO MODEL_GROUP").upper()
@@ -382,7 +382,7 @@ class CarlistMyService:
             now = datetime.now()
             image_urls = car.get("image") or []
             image_urls_str = json.dumps(image_urls)
-            brand = (car.get("brand") or "unknown").upper()
+            brand = (car.get("brand") or "unknown").upper().replace("-", " ")
             model_group = (car.get("model_group") or "NO MODEL_GROUP").upper()
             model = (car.get("model") or "unknown").upper()
             variant = (car.get("variant") or "NO VARIANT").upper()
