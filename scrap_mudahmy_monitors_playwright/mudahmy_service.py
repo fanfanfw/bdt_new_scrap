@@ -169,6 +169,29 @@ class MudahMyService:
             self.playwright.stop()
         logging.info("🛑 Browser Playwright ditutup.")
 
+    def normalize_model_variant(text):
+        """
+        Membersihkan string model/variant:
+        - Menghilangkan karakter aneh: -, (, ), _
+        - Mengganti underscore menjadi spasi
+        - Merapikan spasi
+        - Ubah ke UPPERCASE
+        - Jika kosong atau "-" atau "N/A", return "NO VARIANT"
+        """
+        if not text or str(text).strip() in ["N/A", "-", ""]:
+            return "NO VARIANT"
+
+        cleaned = re.sub(r'[\-\(\)_]', ' ', text)
+        cleaned = re.sub(r'[^\w\s]', '', cleaned)
+        cleaned = ' '.join(cleaned.split())
+        cleaned = cleaned.upper()
+
+        # Jika hasil akhirnya kosong, return NO VARIANT
+        if not cleaned:
+            return "NO VARIANT"
+        return cleaned
+
+
     def insert_new_listing(self, listing_url, price):
         """Insert listing_url baru ke database dengan status active dan price dari halaman utama."""
         try:
@@ -837,6 +860,8 @@ class MudahMyService:
 
             # ===== TAMBAHAN: Normalize brand name =====
             normalized_brand = self.normalize_brand_name(car_data.get("brand"))
+            normalized_model = self.normalize_model_variant(car_data.get("model"))
+            normalized_variant = self.normalize_model_variant(car_data.get("variant"))
             
             if row:
                 car_id, old_price, *null_fields = row
@@ -856,9 +881,9 @@ class MudahMyService:
                 """
                 # Gunakan normalized_brand instead of car_data.get("brand")
                 self.cursor.execute(update_query, (
-                    normalized_brand,  # <-- PERUBAHAN DI SINI
-                    car_data.get("model"),
-                    car_data.get("variant"),
+                    normalized_brand,
+                    normalized_model,
+                    normalized_variant,
                     car_data.get("information_ads"),
                     car_data.get("location"),
                     price_int,
@@ -910,9 +935,9 @@ class MudahMyService:
                 # Gunakan normalized_brand instead of car_data.get("brand")
                 self.cursor.execute(insert_query, (
                     car_data["listing_url"],
-                    normalized_brand,  # <-- PERUBAHAN DI SINI
-                    car_data.get("model"),
-                    car_data.get("variant"),
+                    normalized_brand,
+                    normalized_model,
+                    normalized_variant,
                     car_data.get("information_ads"),
                     car_data.get("location"),
                     price_int,

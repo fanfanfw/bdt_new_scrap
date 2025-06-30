@@ -168,6 +168,29 @@ class MudahMyNullService:
                 else:
                     time.sleep(7)
 
+    def normalize_model_variant(text):
+        """
+        Membersihkan string model/variant:
+        - Menghilangkan karakter aneh: -, (, ), _
+        - Mengganti underscore menjadi spasi
+        - Merapikan spasi
+        - Ubah ke UPPERCASE
+        - Jika kosong atau "-" atau "N/A", return "NO VARIANT"
+        """
+        if not text or str(text).strip() in ["N/A", "-", ""]:
+            return "NO VARIANT"
+
+        cleaned = re.sub(r'[\-\(\)_]', ' ', text)
+        cleaned = re.sub(r'[^\w\s]', '', cleaned)
+        cleaned = ' '.join(cleaned.split())
+        cleaned = cleaned.upper()
+
+        # Jika hasil akhirnya kosong, return NO VARIANT
+        if not cleaned:
+            return "NO VARIANT"
+        return cleaned
+
+
     def insert_new_listing(self, listing_url, price):
         """Insert listing_url baru ke database dengan status active dan price dari halaman utama."""
         try:
@@ -648,6 +671,8 @@ class MudahMyNullService:
             # Normalisasi brand name sebelum menyimpan
             original_brand = car_data.get("brand")
             normalized_brand = self.normalize_brand_name(original_brand)
+            normalized_model = self.normalize_model_variant(car_data.get("model"))
+            normalized_variant = self.normalize_model_variant(car_data.get("variant"))
             
             if original_brand != normalized_brand:
                 logging.info(f"Brand dinormalisasi dari '{original_brand}' menjadi '{normalized_brand}'")
@@ -697,9 +722,9 @@ class MudahMyNullService:
                     WHERE id=%s
                 """
                 self.cursor.execute(update_query, (
-                    normalized_brand,  # Gunakan brand yang sudah dinormalisasi
-                    car_data.get("model"),
-                    car_data.get("variant"),
+                    normalized_brand,
+                    normalized_model,
+                    normalized_variant,
                     car_data.get("information_ads"),
                     car_data.get("location"),
                     price_int,
@@ -737,9 +762,9 @@ class MudahMyNullService:
                 """
                 self.cursor.execute(insert_query, (
                     car_data["listing_url"],
-                    normalized_brand,  # Gunakan brand yang sudah dinormalisasi
-                    car_data.get("model"),
-                    car_data.get("variant"),
+                    normalized_brand,
+                    normalized_model,
+                    normalized_variant,
                     car_data.get("information_ads"),
                     car_data.get("location"),
                     price_int,
