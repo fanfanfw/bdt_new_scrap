@@ -169,7 +169,7 @@ class MudahMyService:
             self.playwright.stop()
         logging.info("🛑 Browser Playwright ditutup.")
 
-    def normalize_model_variant(text):
+    def normalize_model_variant(self, text):
         """
         Membersihkan string model/variant:
         - Menghilangkan karakter aneh: -, (, ), _

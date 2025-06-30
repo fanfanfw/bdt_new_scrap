@@ -121,7 +121,7 @@ class CarlistMyNullService:
         except:
             pass
     
-    def normalize_field(text, default_value):
+    def normalize_field(self, text, default_value):
         if not text or str(text).strip() in ["-", "N/A", ""]:
             return default_value
         cleaned = re.sub(r'[\-\(\)_]', ' ', text)

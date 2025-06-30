@@ -168,7 +168,7 @@ class MudahMyNullService:
                 else:
                     time.sleep(7)
 
-    def normalize_model_variant(text):
+    def normalize_model_variant(self, text):
         """
         Membersihkan string model/variant:
         - Menghilangkan karakter aneh: -, (, ), _
