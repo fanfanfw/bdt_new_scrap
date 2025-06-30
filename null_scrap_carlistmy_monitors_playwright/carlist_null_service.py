@@ -120,6 +120,15 @@ class CarlistMyNullService:
             self.playwright.stop()
         except:
             pass
+    
+    def normalize_field(text, default_value):
+        if not text or str(text).strip() in ["-", "N/A", ""]:
+            return default_value
+        cleaned = re.sub(r'[\-\(\)_]', ' ', text)
+        cleaned = re.sub(r'[^\w\s]', '', cleaned)
+        cleaned = ' '.join(cleaned.split())
+        cleaned = cleaned.upper()
+        return cleaned if cleaned else default_value
 
     def scrape_null_entries(self, id_min=None, id_max=None):
         query = f"""
@@ -212,7 +221,7 @@ class CarlistMyNullService:
         brand = (brand or "UNKNOWN").upper().replace("-", " ")
         model = (model or "UNKNOWN").upper()
         variant = (variant or "NO VARIANT").upper()
-        model_group = (model_group or "NO MODEL_GROUP").upper()
+        model_group = (model_group or "NO MODEL GROUP").upper()
 
         # Extract images
         meta_imgs = self.page.query_selector_all("head > meta[name='prerender']")
@@ -315,10 +324,10 @@ class CarlistMyNullService:
             image_str = json.dumps(car.get("image") or [])
 
             # LOGIKA PENYESUAIAN FIELD
-            brand = (car.get("brand") or "unknown").upper().replace("-", " ")
-            model_group = (car.get("model_group") or "NO MODEL_GROUP").upper()
-            model = (car.get("model") or "UNKNOWN").upper()
-            variant = (car.get("variant") or "NO VARIANT").upper()
+            brand = (car.get("brand") or "UNKNOWN").upper().replace("-", " ")
+            model_group = self.normalize_field(car.get("model_group"), "NO MODEL GROUP").upper()
+            model = self.normalize_field(car.get("model"), "NO MODEL").upper()
+            variant = self.normalize_field(car.get("variant"), "NO VARIANT").upper()
 
             if row:
                 car_id, old_price, version = row

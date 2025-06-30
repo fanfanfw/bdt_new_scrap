@@ -206,6 +206,15 @@ class CarlistMyService:
                 if attempt < retries - 1:
                     time.sleep(7)
         raise Exception("Gagal mengambil IP setelah beberapa retry.")
+    
+    def normalize_field(text, default_value):
+        if not text or str(text).strip() in ["-", "N/A", ""]:
+            return default_value
+        cleaned = re.sub(r'[\-\(\)_]', ' ', text)
+        cleaned = re.sub(r'[^\w\s]', '', cleaned)
+        cleaned = ' '.join(cleaned.split())
+        cleaned = cleaned.upper()
+        return cleaned if cleaned else default_value
 
     def scrape_detail(self, url):
         max_retries = 3
@@ -290,7 +299,7 @@ class CarlistMyService:
                 brand = (brand or "UNKNOWN").upper().replace("-", " ")
                 model = (model or "UNKNOWN").upper()
                 variant = (variant or "NO VARIANT").upper()
-                model_group = (model_group or "NO MODEL_GROUP").upper()
+                model_group = (model_group or "NO MODEL GROUP").upper()
 
                 logging.info(f"Hasil mapping: Brand={brand}, Model Group={model_group}, Model={model}, Variant={variant}")
 
@@ -382,10 +391,10 @@ class CarlistMyService:
             now = datetime.now()
             image_urls = car.get("image") or []
             image_urls_str = json.dumps(image_urls)
-            brand = (car.get("brand") or "unknown").upper().replace("-", " ")
-            model_group = (car.get("model_group") or "NO MODEL_GROUP").upper()
-            model = (car.get("model") or "unknown").upper()
-            variant = (car.get("variant") or "NO VARIANT").upper()
+            brand = (car.get("brand") or "UNKNOWN").upper().replace("-", " ")
+            model_group = self.normalize_field(car.get("model_group"), "NO MODEL GROUP").upper()
+            model = self.normalize_field(car.get("model"), "NO MODEL").upper()
+            variant = self.normalize_field(car.get("variant"), "NO VARIANT").upper()
             car_id = None
 
             if row:
