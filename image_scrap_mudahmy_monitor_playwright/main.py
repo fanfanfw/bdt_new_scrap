@@ -102,7 +102,7 @@ def main(start_id=None, end_id=None):
 
     query = """
         SELECT id, brand, model, variant, images
-        FROM cars_scrap
+        FROM cars_scrap_mudahmy
         WHERE images IS NOT NULL AND images != ''
     """
     params = []
