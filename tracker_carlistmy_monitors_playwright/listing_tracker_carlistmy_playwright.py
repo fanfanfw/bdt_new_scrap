@@ -17,8 +17,7 @@ DB_TABLE_PRIMARY = os.getenv("DB_TABLE_SCRAP_CARLIST", "cars_scrap")
 
 START_DATE = datetime.now().strftime('%Y%m%d')
 
-base_dir = Path(__file__).resolve().parents[2]
-log_dir = base_dir / "logs"
+log_dir = Path(__file__).resolve().parents[0].parents[0] / "logs"
 log_dir.mkdir(parents=True, exist_ok=True)
 
 log_file = log_dir / f"tracker_carlistmy_{START_DATE}.log"
@@ -95,7 +94,7 @@ class ListingTrackerCarlistmyPlaywright:
         self.playwright = sync_playwright().start()
 
         launch_kwargs = {
-            "headless": True,
+            "headless": False,
             "args": ["--disable-blink-features=AutomationControlled", "--no-sandbox"]
         }
 
@@ -121,7 +120,7 @@ class ListingTrackerCarlistmyPlaywright:
         stealth_sync(self.page)
         logging.info("✅ Browser Playwright berhasil diinisialisasi.")
 
-    def save_price_change(self, car_id, old_price, new_price):
+    def save_price_change(self, old_price, new_price, listing_url):
         conn = get_connection()
         if not conn:
             logger.error("❌ Gagal koneksi database saat simpan harga.")
@@ -129,13 +128,13 @@ class ListingTrackerCarlistmyPlaywright:
         cursor = conn.cursor()
         try:
             cursor.execute("""
-                INSERT INTO price_history_scrap (car_id, old_price, new_price, changed_at)
-                VALUES (%s, %s, %s, %s)
-            """, (car_id, old_price, new_price, datetime.now()))
+                INSERT INTO price_history_scrap_carlistmy (old_price, new_price, changed_at, listing_url)
+                VALUES (%s, %s, NOW(), %s)
+            """, (old_price, new_price, listing_url))
             conn.commit()
-            logger.info(f"📝 Perubahan harga disimpan untuk ID={car_id}")
+            logger.info(f"📝 Perubahan harga disimpan untuk URL={listing_url}")
         except Exception as e:
-            logger.error(f"❌ Gagal simpan perubahan harga ID={car_id}: {e}")
+            logger.error(f"❌ Gagal simpan perubahan harga untuk URL={listing_url}: {e}")
         finally:
             cursor.close()
             conn.close()
@@ -257,7 +256,7 @@ class ListingTrackerCarlistmyPlaywright:
                 SELECT id, listing_url, status, price
                 FROM {DB_TABLE_PRIMARY}
                 WHERE id >= %s AND status != 'sold'
-                AND (last_scraped_at IS NULL OR last_scraped_at < %s)
+                AND (last_status_check IS NULL OR last_status_check < %s)
                 ORDER BY id
             """, (start_id, threshold_date))
         else:
@@ -265,7 +264,7 @@ class ListingTrackerCarlistmyPlaywright:
                 SELECT id, listing_url, status, price
                 FROM {DB_TABLE_PRIMARY}
                 WHERE status = %s AND id >= %s AND status != 'sold'
-                AND (last_scraped_at IS NULL OR last_scraped_at < %s)
+                AND (last_status_check IS NULL OR last_status_check < %s)
                 ORDER BY id
             """, (status_filter, start_id, threshold_date))
 
@@ -306,7 +305,7 @@ class ListingTrackerCarlistmyPlaywright:
                 new_price = self.extract_price_from_page()
                 if new_price is not None and new_price != old_price:
                     logger.info(f"💲 Harga berubah! ID={car_id}: {old_price} ➜ {new_price}")
-                    self.save_price_change(car_id, old_price, new_price)
+                    self.save_price_change(old_price, new_price, url)
                     self.update_price(car_id, new_price)
 
                 self.update_car_status(car_id, "active")
