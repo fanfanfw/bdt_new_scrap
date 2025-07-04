@@ -18,8 +18,7 @@ DB_TABLE_PRIMARY = os.getenv("DB_TABLE_SCRAP_MUDAH", "cars_scrap")
 
 START_DATE = datetime.now().strftime('%Y%m%d')
 
-base_dir = Path(__file__).resolve().parents[2]
-log_dir = base_dir / "logs"
+log_dir = Path(__file__).resolve().parents[0].parents[0] / "logs"
 log_dir.mkdir(parents=True, exist_ok=True)
 
 log_file = log_dir / f"tracker_mudahmy_{START_DATE}.log"
@@ -244,7 +243,7 @@ class ListingTrackerMudahmyPlaywright:
             FROM {DB_TABLE_PRIMARY}
             WHERE {status_condition}
             AND id >= %s
-            AND (last_scraped_at IS NULL OR last_scraped_at < NOW() - INTERVAL '30 days')
+            AND (last_status_check IS NULL OR last_status_check < NOW() - INTERVAL '30 days')
             ORDER BY id
         """, (start_id,))
         listings = cursor.fetchall()
@@ -307,9 +306,9 @@ class ListingTrackerMudahmyPlaywright:
                             cur_hist = conn_hist.cursor()
 
                             cur_hist.execute(f"""
-                                INSERT INTO price_history_scrap (car_id, old_price, new_price, changed_at)
-                                VALUES (%s, %s, %s, NOW())
-                            """, (car_id, old_price, new_price))
+                                INSERT INTO price_history_scrap_mudahmy (old_price, new_price, changed_at, listing_url)
+                                VALUES (%s, %s, NOW(), %s)
+                            """, (old_price, new_price, url))
                             cur_hist.execute(f"""
                                 UPDATE {DB_TABLE_PRIMARY}
                                 SET price = %s
@@ -360,7 +359,7 @@ class ListingTrackerMudahmyPlaywright:
                 self.random_delay()
 
                 if url_count % random.randint(5, 9) == 0:
-                    pause_duration = random.uniform(20, 60)
+                    pause_duration = random.uniform(7, 10)
                     logger.info(f"⏸️ Mini pause {pause_duration:.2f} detik untuk menghindari deteksi bot...")
                     time.sleep(pause_duration)
 
