@@ -14,7 +14,7 @@ from .database import get_connection
 
 load_dotenv(override=True)
 
-DB_TABLE_PRIMARY = os.getenv("DB_TABLE_SCRAP_CARLIST", "cars_scrap")
+DB_TABLE_PRIMARY = os.getenv("DB_TABLE_SCRAP_MUDAH", "cars_scrap")
 
 START_DATE = datetime.now().strftime('%Y%m%d')
 
