@@ -254,15 +254,117 @@ class CarlistMyService:
                 engine_cc, fuel_type = None, None
                 try:
                     if self.page.is_visible('div#tab-specifications'):
-                        engine_cc_elem = self.page.query_selector(
-                            '#tab-specifications > div:nth-child(3) > div:nth-child(2) > div > span.u-text-bold.u-width-1\\/2.u-align-right'
-                        )
-                        engine_cc = engine_cc_elem.inner_text().strip() if engine_cc_elem else None
-
-                        fuel_type_elem = self.page.query_selector(
-                            '#tab-specifications > div:nth-child(3) > div:nth-child(8) > div > span.u-text-bold.u-width-1\\/2.u-align-right'
-                        )
-                        fuel_type = fuel_type_elem.inner_text().strip() if fuel_type_elem else None
+                        # Metode 1: Cari secara spesifik fuel type dalam ENGINE SPECIFICATIONS section
+                        try:
+                            # Ambil semua spesifikasi dari section Engine
+                            engine_sections = self.page.query_selector_all('#tab-specifications > div')
+                            
+                            for section in engine_sections:
+                                # Cari div dengan header "ENGINE SPECIFICATIONS" (biasanya div pertama)
+                                header = section.query_selector('div.u-text-bold')
+                                if header and "ENGINE SPECIFICATIONS" in header.inner_text().upper():
+                                    # Cari SEMUA row dengan label yang mengandung "FUEL" dalam ENGINE SPECIFICATIONS section
+                                    spec_rows = section.query_selector_all('div:not(:first-child)')
+                                    
+                                    for row in spec_rows:
+                                        label_elem = row.query_selector('div > span:not(.u-text-bold)')
+                                        if not label_elem:
+                                            continue
+                                            
+                                        label_text = label_elem.inner_text().strip().upper()
+                                        
+                                        # Pastikan ini adalah Fuel Type, bukan Fuel Consumption atau yang lain
+                                        if "FUEL TYPE" in label_text:
+                                            value_elem = row.query_selector('div > span.u-text-bold')
+                                            if value_elem:
+                                                fuel_type = value_elem.inner_text().strip()
+                                                logging.info(f"Found fuel type in ENGINE SPECIFICATIONS: {fuel_type}")
+                                                break
+                        except Exception as e:
+                            logging.warning(f"Gagal ambil fuel type dalam ENGINE SPECIFICATIONS: {e}")
+                        
+                        # Metode 2: Cari secara spesifik label "Fuel Type", hindari "Fuel Consumption"
+                        if not fuel_type:
+                            try:
+                                # Gunakan selector yang lebih spesifik untuk fuel type
+                                fuel_type_rows = self.page.query_selector_all('div:has(span:text-matches("(?i)fuel\\s*type"))')
+                                for row in fuel_type_rows:
+                                    value_elem = row.query_selector('span.u-text-bold')
+                                    if value_elem:
+                                        fuel_type = value_elem.inner_text().strip()
+                                        logging.info(f"Found fuel type using specific text-match: {fuel_type}")
+                                        break
+                                        
+                                # Jika masih tidak ditemukan, coba dengan selector yang lebih longgar tapi filter hasil
+                                if not fuel_type:
+                                    fuel_rows = self.page.query_selector_all('div:has(span:text-matches("(?i)fuel"))')
+                                    for row in fuel_rows:
+                                        label_elem = row.query_selector('span:not(.u-text-bold)')
+                                        if label_elem:
+                                            label_text = label_elem.inner_text().strip().lower()
+                                            # Filter hanya fuel type, bukan fuel consumption atau lainnya
+                                            if "fuel type" in label_text and "consumption" not in label_text:
+                                                value_elem = row.query_selector('span.u-text-bold')
+                                                if value_elem:
+                                                    fuel_type = value_elem.inner_text().strip()
+                                                    logging.info(f"Found fuel type after filtering: {fuel_type}")
+                                                    break
+                            except Exception as e:
+                                logging.warning(f"Gagal ambil fuel type dengan text-matches: {e}")
+                                
+                        # Metode 3: Scan semua specification sections
+                        specification_sections = self.page.query_selector_all('#tab-specifications > div')
+                        
+                        for section in specification_sections:
+                            specification_rows = section.query_selector_all('div')
+                            
+                            for row in specification_rows:
+                                label_elem = row.query_selector('div > span:not(.u-text-bold)')
+                                if not label_elem:
+                                    continue
+                                    
+                                label_text = label_elem.inner_text().strip().lower()
+                                value_elem = row.query_selector('div > span.u-text-bold')
+                                
+                                if not value_elem:
+                                    continue
+                                    
+                                value_text = value_elem.inner_text().strip()
+                                
+                                # More flexible matching patterns
+                                if any(term in label_text for term in ['engine capacity', 'engine cc', 'displacement', 'engine size']):
+                                    engine_cc = value_text
+                                    logging.info(f"Playwright found engine CC: {engine_cc}")
+                                
+                                if any(term in label_text for term in ['fuel type', 'fuel', 'petrol/diesel']):
+                                    fuel_type = value_text
+                                    logging.info(f"Playwright found fuel type: {fuel_type}")
+                        
+                        # Try alternative selectors if not found
+                        if engine_cc is None:
+                            engine_cc_elem = self.page.query_selector('text="Engine CC" ~ span, text="Engine Capacity" ~ span')
+                            if engine_cc_elem:
+                                engine_cc = engine_cc_elem.inner_text().strip()
+                                logging.info(f"Found engine CC with alternative selector: {engine_cc}")
+                        
+                        if fuel_type is None:
+                            fuel_type_elem = self.page.query_selector('text="Fuel Type" ~ span, text="Fuel" ~ span')
+                            if fuel_type_elem:
+                                fuel_type = fuel_type_elem.inner_text().strip()
+                                logging.info(f"Found fuel type with alternative selector: {fuel_type}")
+                                
+                        # Evaluasi numerik dari engine_cc - ekstrak angkanya saja
+                        if engine_cc:
+                            try:
+                                # Ekstrak semua digit yang ada di string
+                                digits = re.findall(r'\d+', engine_cc)
+                                if digits:
+                                    # Gabungkan semua digit jika ada beberapa kelompok digit
+                                    engine_cc = ''.join(digits)
+                                    logging.info(f"Extracted numeric engine CC: {engine_cc}")
+                            except Exception as e:
+                                logging.warning(f"Failed to clean engine CC: {e}")
+                                
                 except Exception as e:
                     logging.warning(f"Gagal ambil spesifikasi: {e}")
 
@@ -277,7 +379,127 @@ class CarlistMyService:
                 except Exception as e:
                     logging.warning(f"Gagal ambil meta image: {e}")
 
+                # Parse page content with BeautifulSoup
                 soup = BeautifulSoup(self.page.content(), "html.parser")
+                
+                # Backup method: extract specs using BeautifulSoup - search all specification sections
+                if engine_cc is None or fuel_type is None:
+                    try:
+                        # Metode 1: Cari ENGINE SPECIFICATIONS section dan cek untuk label "Fuel Type"
+                        engine_headers = soup.find_all(string=lambda text: text and "ENGINE SPECIFICATIONS" in text.upper())
+                        for header in engine_headers:
+                            header_div = header.parent
+                            if header_div:
+                                parent_section = header_div.parent
+                                if parent_section:
+                                    # Dapatkan semua baris di section ini, kecuali header
+                                    spec_rows = parent_section.select('div:not(:first-child)')
+                                    
+                                    # Periksa SEMUA baris untuk label "Fuel Type" yang spesifik
+                                    for row in spec_rows:
+                                        label = row.select_one('span:not(.u-text-bold)')
+                                        if label and "FUEL TYPE" in label.text.upper():
+                                            value = row.select_one('span.u-text-bold')
+                                            if value:
+                                                fuel_type = value.text.strip()
+                                                logging.info(f"BeautifulSoup found fuel type in ENGINE SPECIFICATIONS: {fuel_type}")
+                                                break
+                        
+                        # Metode 2: Scan semua spec tables dengan filter yang lebih ketat
+                        if not fuel_type or not engine_cc:
+                            spec_sections = soup.select('#tab-specifications > div')
+                            
+                            for section in spec_sections:
+                                # Check apakah ini section ENGINE SPECIFICATIONS
+                                header = section.select_one('div.u-text-bold')
+                                is_engine_section = header and "ENGINE SPECIFICATIONS" in header.text.upper()
+                                
+                                spec_rows = section.select('div')
+                                
+                                for row in spec_rows:
+                                    label = row.select_one('div > span:not(.u-text-bold)')
+                                    value = row.select_one('div > span.u-text-bold')
+                                    
+                                    if label and value:
+                                        label_text = label.text.strip().lower()
+                                        value_text = value.text.strip()
+                                        
+                                        # Hanya cari fuel type dalam ENGINE SPECIFICATIONS section
+                                        # atau pastikan ini adalah "fuel type", bukan "fuel consumption"
+                                        if not fuel_type:
+                                            if (is_engine_section and "fuel" in label_text) or "fuel type" in label_text:
+                                                if "consumption" not in label_text:
+                                                    fuel_type = value_text
+                                                    logging.info(f"BeautifulSoup found specific fuel type: {fuel_type}")
+                                            
+                                        if not engine_cc and any(term in label_text for term in ['engine capacity', 'engine cc', 'displacement']):
+                                            engine_cc = value_text
+                                            # Ekstrak angka dari engine_cc
+                                            digits = re.findall(r'\d+', engine_cc)
+                                            if digits:
+                                                engine_cc = ''.join(digits)
+                                            logging.info(f"BeautifulSoup found engine CC: {engine_cc}")
+                                            
+                                # Break jika kedua nilai sudah ditemukan
+                                if fuel_type and engine_cc:
+                                    break
+                        
+                        # Metode 3: Cari elemen dengan text yang TEPAT "Fuel Type" di seluruh halaman
+                        if not fuel_type:
+                            # Cari lebih spesifik "Fuel Type" dan hindari "Fuel Consumption" dll
+                            fuel_labels = soup.find_all(['span', 'div'], string=lambda text: text and (
+                                'fuel type' in text.lower() and 
+                                'consumption' not in text.lower()
+                            ))
+                            
+                            for label in fuel_labels:
+                                # Ambil dari elemen bold terdekat
+                                next_elem = label.find_next('span', class_='u-text-bold')
+                                if next_elem:
+                                    fuel_type = next_elem.text.strip()
+                                    logging.info(f"BeautifulSoup found specific fuel type by global search: {fuel_type}")
+                                    break
+                                
+                                # Atau coba ambil dari parent yang sama
+                                parent = label.parent
+                                if parent:
+                                    value_elem = parent.select_one('span.u-text-bold')
+                                    if value_elem:
+                                        fuel_type = value_elem.text.strip()
+                                        logging.info(f"BeautifulSoup found fuel type from parent element: {fuel_type}")
+                                        break
+                        
+                        # Final fallback - search for any text element containing standard fuel type keywords
+                        if not fuel_type:
+                            # Kata kunci khusus untuk jenis bahan bakar, bukan nilai konsumsi
+                            fuel_type_values = ['petrol - unleaded', 'diesel', 'hybrid', 'electric', 'gasoline', 'ulp']
+                            
+                            # Prioritaskan pencarian di elemen yang ditandai sebagai nilai/value
+                            bold_elements = soup.select('span.u-text-bold')
+                            for elem in bold_elements:
+                                text = elem.text.strip().lower()
+                                if any(fuel_val in text for fuel_val in fuel_type_values):
+                                    # Pastikan ini bukan angka (untuk menghindari nilai fuel consumption)
+                                    if not re.match(r'^[\d\.]+$', text) and 'l/100km' not in text:
+                                        fuel_type = elem.text.strip()
+                                        logging.info(f"Found standard fuel type from bold elements: {fuel_type}")
+                                        break
+                            
+                            # Jika masih tidak ditemukan, cari di semua text elemen tapi dengan filter ketat
+                            if not fuel_type:
+                                fuel_elements = soup.find_all(string=lambda text: text and any(fuel_val in text.lower() for fuel_val in fuel_type_values))
+                                
+                                for elem in fuel_elements:
+                                    # Filter numerik untuk menghindari nilai konsumsi
+                                    if not re.match(r'^[\d\.]+$', elem.strip()) and 'l/100km' not in elem.lower():
+                                        parent = elem.parent
+                                        if parent and parent.name in ['span', 'div']:
+                                            fuel_type = elem.strip()
+                                            logging.info(f"Found fuel type from page text (strict filtering): {fuel_type}")
+                                            break
+                                    
+                    except Exception as e:
+                        logging.warning(f"Gagal ekstraksi spesifikasi dengan BeautifulSoup: {e}")
 
                 spans = soup.select("#listing-detail li > a > span")
                 valid_spans = [span for span in spans if span.text.strip()]
@@ -334,6 +556,113 @@ class CarlistMyService:
 
                 # Konversi mileage ke integer sesuai format
                 mileage_int = parse_mileage(mileage)
+                
+                # Bersihkan dan standarisasi engine_cc (ekstrak angka saja)
+                if engine_cc:
+                    try:
+                        # Ekstrak semua digit dari string engine_cc
+                        digits = re.findall(r'\d+', str(engine_cc))
+                        if digits:
+                            # Gabungkan semua digit yang ditemukan
+                            engine_cc = ''.join(digits)
+                            logging.info(f"Cleaned engine CC to numeric value: {engine_cc}")
+                        else:
+                            logging.warning(f"Invalid engine_cc value (no digits): {engine_cc}")
+                            engine_cc = None
+                    except Exception as e:
+                        logging.warning(f"Error cleaning engine_cc: {e}")
+                
+                # Normalize fuel type untuk memastikan konsistensi
+                def normalize_fuel_type(fuel_value):
+                    if not fuel_value:
+                        return None
+                        
+                    fuel_value = str(fuel_value).lower().strip()
+                    
+                    # Mapping nilai fuel type ke standar
+                    if any(word in fuel_value for word in ['petrol', 'gasoline', 'bensin', 'ron', 'unleaded', 'ulp']):
+                        return "Petrol - Unleaded (ULP)"
+                    elif any(word in fuel_value for word in ['diesel', 'tdi', 'dci', 'hdi', 'crdi']):
+                        return "Diesel"
+                    elif any(word in fuel_value for word in ['hybrid', 'hibrid']):
+                        if 'plug' in fuel_value:
+                            return "Plug-in Hybrid"
+                        return "Hybrid"
+                    elif any(word in fuel_value for word in ['electric', 'ev', 'bev']):
+                        return "Electric"
+                    elif 'lpg' in fuel_value or 'cng' in fuel_value or 'gas' in fuel_value:
+                        return "Gas"
+                    else:
+                        # Check for numeric values that might be misinterpreted as fuel type (often engine specs)
+                        if re.match(r'^[\d\.]+$', fuel_value) or re.match(r'^\d+\s*cc$', fuel_value):
+                            logging.warning(f"Detected potential numeric value as fuel type: {fuel_value}")
+                            return None
+                        
+                        return fuel_value.capitalize()
+                
+                # Terapkan normalisasi
+                normalized_fuel_type = normalize_fuel_type(fuel_type)
+                if normalized_fuel_type:
+                    fuel_type = normalized_fuel_type
+                    logging.info(f"Normalized fuel type: {fuel_type}")
+                    
+                # Fallback - coba tebak fuel type dari variant atau model jika masih kosong
+                if not fuel_type:
+                    variant_model_text = f"{variant} {model}".lower()
+                    if any(term in variant_model_text for term in ['diesel', 'crdi', 'dci', 'tdi', 'hdi']):
+                        fuel_type = "Diesel"
+                        logging.info(f"Inferred diesel from variant/model: {variant} {model}")
+                    elif any(term in variant_model_text for term in ['hybrid', 'hev', 'phev']):
+                        if 'phev' in variant_model_text or 'plug' in variant_model_text:
+                            fuel_type = "Plug-in Hybrid"
+                        else:
+                            fuel_type = "Hybrid"
+                        logging.info(f"Inferred hybrid from variant/model: {variant} {model}")
+                    elif any(term in variant_model_text for term in ['electric', 'ev', 'bev']):
+                        fuel_type = "Electric"
+                        logging.info(f"Inferred electric from variant/model: {variant} {model}")
+                    else:
+                        # Default to petrol if nothing else matches
+                        fuel_type = "Petrol - Unleaded (ULP)"
+                        logging.info("No fuel type found, defaulting to Petrol")
+                        
+                # Final validation untuk engine_cc dan fuel_type
+                try:
+                    # Validasi fuel_type untuk memastikan bukan nilai konsumsi atau numerik
+                    if fuel_type:
+                        # Jika fuel_type hanya berisi digit atau angka dengan desimal, kemungkinan itu adalah nilai konsumsi
+                        if re.match(r'^[\d\.]+$', fuel_type):
+                            logging.warning(f"Fuel type appears to be numeric value: {fuel_type}. Setting to default.")
+                            fuel_type = "Petrol - Unleaded (ULP)"
+                        
+                        # Jika fuel_type mengandung karakter 'L' dan angka, kemungkinan itu adalah nilai konsumsi
+                        elif 'l/' in fuel_type.lower() or 'km/l' in fuel_type.lower() or 'liter' in fuel_type.lower():
+                            logging.warning(f"Fuel type appears to be consumption value: {fuel_type}. Setting to default.")
+                            fuel_type = "Petrol - Unleaded (ULP)"
+                            
+                        # Jika fuel_type terlalu pendek (misalnya hanya "6.4"), kemungkinan itu adalah nilai konsumsi
+                        elif len(fuel_type) < 4:
+                            logging.warning(f"Fuel type too short, likely not valid: {fuel_type}. Setting to default.")
+                            fuel_type = "Petrol - Unleaded (ULP)"
+                            
+                        # Pastikan fuel_type adalah salah satu dari nilai standar
+                        standard_types = ["petrol", "diesel", "hybrid", "plug-in hybrid", "electric", "gas"]
+                        if not any(std_type in fuel_type.lower() for std_type in standard_types):
+                            logging.warning(f"Fuel type not matching standard types: {fuel_type}. Setting to default.")
+                            fuel_type = "Petrol - Unleaded (ULP)"
+                        
+                    # Fix untuk nilai engine_cc yang invalid
+                    if engine_cc:
+                        cc_value = int(engine_cc)
+                        # Filter nilai engine_cc yang tidak masuk akal (terlalu kecil atau besar)
+                        if cc_value < 500 or cc_value > 10000:
+                            logging.warning(f"Engine CC value out of reasonable range: {cc_value}")
+                            engine_cc = None
+                except Exception as e:
+                    logging.warning(f"Error validating final values: {e}")
+                    
+                # Final logging dari hasil yang ditemukan
+                logging.info(f"Final extraction results - Fuel Type: {fuel_type}, Engine CC: {engine_cc}")
 
                 return {
                     "listing_url": url,
