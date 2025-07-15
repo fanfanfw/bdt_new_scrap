@@ -875,11 +875,11 @@ class MudahMyService:
                         information_ads=%s, location=%s,
                         price=%s, year=%s, mileage=%s,
                         transmission=%s, seat_capacity=%s,
-                        last_scraped_at=%s, condition=%s, engine_cc=%s,
+                        last_scraped_at=%s, last_status_check=%s, condition=%s, engine_cc=%s,
                         fuel_type=%s, images=%s
                     WHERE id=%s
                 """
-                # Gunakan normalized_brand instead of car_data.get("brand")
+                now_dt = datetime.now()
                 self.cursor.execute(update_query, (
                     normalized_brand,
                     normalized_model,
@@ -891,7 +891,8 @@ class MudahMyService:
                     mileage_conv,
                     car_data.get("transmission"),
                     car_data.get("seat_capacity"),
-                    datetime.now(),
+                    now_dt,
+                    now_dt,
                     car_data.get("condition", "N/A"),
                     car_data.get("engine_cc"),
                     car_data.get("fuel_type"),
@@ -926,13 +927,13 @@ class MudahMyService:
                     INSERT INTO {DB_TABLE_SCRAP}
                         (listing_url, brand, model, variant, information_ads, location,
                         price, year, mileage, transmission, seat_capacity,
-                        condition, engine_cc, fuel_type, images)
+                        condition, engine_cc, fuel_type, images, last_scraped_at, last_status_check)
                     VALUES
                         (%s, %s, %s, %s, %s, %s,
-                        %s, %s, %s, %s, %s, %s, %s, %s, %s)
+                        %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
                     RETURNING id
                 """
-                # Gunakan normalized_brand instead of car_data.get("brand")
+                now_dt = datetime.now()
                 self.cursor.execute(insert_query, (
                     car_data["listing_url"],
                     normalized_brand,
@@ -949,6 +950,8 @@ class MudahMyService:
                     car_data.get("engine_cc"),
                     car_data.get("fuel_type"),
                     json.dumps(car_data.get("images", [])),
+                    now_dt,
+                    now_dt
                 ))
                 result = self.cursor.fetchone()
                 if result is not None:

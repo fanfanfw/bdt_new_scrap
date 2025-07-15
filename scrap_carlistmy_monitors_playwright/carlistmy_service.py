@@ -401,35 +401,33 @@ class CarlistMyService:
                 car_id, old_price, version, existing_ads_date = row
                 if self.download_images_locally:
                     self.download_images(image_urls, brand, model, variant, car_id)
-                
                 ads_date_to_use = existing_ads_date or now.strftime("%Y-%m-%d")
-                
                 self.cursor.execute(f"""
                     UPDATE {DB_TABLE_SCRAP}
                     SET brand=%s, model_group=%s, model=%s, variant=%s, information_ads=%s,
                         location=%s, condition=%s, price=%s, year=%s, mileage=%s,
                         transmission=%s, seat_capacity=%s, engine_cc=%s, fuel_type=%s,
-                        last_scraped_at=%s, images=%s, information_ads_date=%s
+                        last_scraped_at=%s, last_status_check=%s, images=%s, information_ads_date=%s
                     WHERE id=%s
                 """, (
                     brand, model_group, model, variant, car.get("information_ads"),
                     car.get("location"), car.get("condition"), car.get("price"), car.get("year"), car.get("mileage"),
                     car.get("transmission"), car.get("seat_capacity"), car.get("engine_cc"), car.get("fuel_type"),
-                    now, image_urls_str, ads_date_to_use, car_id
+                    now, now, image_urls_str, ads_date_to_use, car_id
                 ))
             else:
                 current_date = now.strftime("%Y-%m-%d")
                 self.cursor.execute(f"""
                     INSERT INTO {DB_TABLE_SCRAP} (
                         listing_url, brand, model_group, model, variant, information_ads, location, condition,
-                        price, year, mileage, transmission, seat_capacity, engine_cc, fuel_type, version, images, information_ads_date
-                    ) VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
+                        price, year, mileage, transmission, seat_capacity, engine_cc, fuel_type, version, images, information_ads_date, last_scraped_at, last_status_check
+                    ) VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
                     RETURNING id
                 """, (
                     car["listing_url"], brand, model_group, model, variant,
                     car.get("information_ads"), car.get("location"), car.get("condition"), car.get("price"),
                     car.get("year"), car.get("mileage"), car.get("transmission"),
-                    car.get("seat_capacity"), car.get("engine_cc"), car.get("fuel_type"), 1, image_urls_str, current_date
+                    car.get("seat_capacity"), car.get("engine_cc"), car.get("fuel_type"), 1, image_urls_str, current_date, now, now
                 ))
                 car_id = self.cursor.fetchone()[0]
                 if self.download_images_locally:

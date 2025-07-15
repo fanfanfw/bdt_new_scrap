@@ -341,13 +341,13 @@ class CarlistMyNullService:
                     SET brand=%s, model_group=%s, model=%s, variant=%s, information_ads=%s,
                         location=%s, condition=%s, price=%s, year=%s, mileage=%s,
                         transmission=%s, seat_capacity=%s, engine_cc=%s, fuel_type=%s,
-                        last_scraped_at=%s, images=%s, version=%s
+                        last_scraped_at=%s, last_status_check=%s, images=%s, version=%s
                     WHERE id=%s
                 """, (
                     brand, model_group, model, variant, car.get("information_ads"),
                     car.get("location"), car.get("condition"), car.get("price"), car.get("year"), car.get("mileage"),
                     car.get("transmission"), car.get("seat_capacity"), car.get("engine_cc"), car.get("fuel_type"),
-                    now, image_str, new_version, car_id
+                    now, now, image_str, new_version, car_id
                 ))
 
                 if car["price"] != old_price:
@@ -360,13 +360,13 @@ class CarlistMyNullService:
                 self.cursor.execute(f"""
                     INSERT INTO {DB_TABLE_SCRAP} (
                         listing_url, brand, model_group, model, variant, information_ads, location, condition,
-                        price, year, mileage, transmission, seat_capacity, engine_cc, fuel_type, version, images
-                    ) VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, 1, %s)
+                        price, year, mileage, transmission, seat_capacity, engine_cc, fuel_type, version, images, last_scraped_at, last_status_check
+                    ) VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, 1, %s, %s, %s)
                 """, (
                     car["listing_url"], brand, model_group, model, variant,
                     car.get("information_ads"), car.get("location"), car.get("condition"), car.get("price"),
                     car.get("year"), car.get("mileage"), car.get("transmission"),
-                    car.get("seat_capacity"), car.get("engine_cc"), car.get("fuel_type"), image_str
+                    car.get("seat_capacity"), car.get("engine_cc"), car.get("fuel_type"), image_str, now, now
                 ))
             self.conn.commit()
             logging.info(f"✅ DB updated: {car['listing_url']}")
