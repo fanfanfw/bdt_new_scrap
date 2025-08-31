@@ -17,7 +17,7 @@ class DataArchiver:
             level=logging.INFO,
             format="%(asctime)s - %(levelname)s - %(message)s",
             handlers=[
-                logging.FileHandler(f"data_archiver_{datetime.now().strftime('%Y%m%d')}.log"),
+                logging.FileHandler(f"logs/data_archiver_{datetime.now().strftime('%Y%m%d')}.log"),
                 logging.StreamHandler()
             ]
         )
