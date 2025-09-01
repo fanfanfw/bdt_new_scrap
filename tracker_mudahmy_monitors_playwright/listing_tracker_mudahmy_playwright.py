@@ -98,7 +98,7 @@ class ListingTrackerMudahmyPlaywright:
         self.playwright = sync_playwright().start()
 
         launch_kwargs = {
-            "headless": False,
+            "headless": True,
             "args": [
                 "--disable-blink-features=AutomationControlled",
                 "--no-sandbox",
