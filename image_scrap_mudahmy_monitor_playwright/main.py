@@ -13,6 +13,8 @@ load_dotenv(override=True)
 BASE_FOLDER = "images_mudah"
 LOG_DIR = "logs"
 LOG_FILE = os.path.join(LOG_DIR, "image_download_mudah.log")
+DEFAULT_TABLE = "cars_scrap_mudahmy"
+ARCHIVE_TABLE = "cars_scrap_mudahmy_archive"
 
 raw_proxies = os.getenv("CUSTOM_PROXIES_MUDAH", "")
 proxies_list = []
@@ -96,13 +98,22 @@ def download_image(url, save_path):
         print(f"❌ Gagal download {url} -> {e}")
         return False
 
-def main(start_id=None, end_id=None):
+def main(
+    start_id=None,
+    end_id=None,
+    brand_filter=None,
+    model_filter=None,
+    variant_filter=None,
+    table_source=DEFAULT_TABLE,
+):
     conn = get_connection()
     cursor = conn.cursor()
 
-    query = """
+    table_name = DEFAULT_TABLE if table_source == DEFAULT_TABLE else ARCHIVE_TABLE
+
+    query = f"""
         SELECT id, brand, model, variant, images
-        FROM cars_scrap_mudahmy
+        FROM {table_name}
         WHERE images IS NOT NULL AND images != ''
     """
     params = []
@@ -113,6 +124,15 @@ def main(start_id=None, end_id=None):
     if end_id is not None:
         query += " AND id <= %s"
         params.append(end_id)
+    if brand_filter:
+        query += " AND LOWER(brand) = LOWER(%s)"
+        params.append(brand_filter)
+    if model_filter:
+        query += " AND LOWER(model) = LOWER(%s)"
+        params.append(model_filter)
+    if variant_filter:
+        query += " AND LOWER(variant) = LOWER(%s)"
+        params.append(variant_filter)
 
     cursor.execute(query, params)
     rows = cursor.fetchall()
@@ -182,6 +202,22 @@ if __name__ == "__main__":
     parser = argparse.ArgumentParser(description="Downloader gambar dari database.")
     parser.add_argument("--start-id", type=int, help="Mulai dari ID (inclusive)")
     parser.add_argument("--end-id", type=int, help="Sampai ID (inclusive)")
+    parser.add_argument("--brand", dest="brand_filter", help="Hanya unduh brand tertentu (exact match, case-insensitive)")
+    parser.add_argument("--model", dest="model_filter", help="Hanya unduh model tertentu (exact match, case-insensitive)")
+    parser.add_argument("--variant", dest="variant_filter", help="Hanya unduh variant tertentu (exact match, case-insensitive)")
+    parser.add_argument(
+        "--table",
+        choices=[DEFAULT_TABLE, ARCHIVE_TABLE],
+        default=DEFAULT_TABLE,
+        help="Pilih tabel sumber data (normal atau archive)",
+    )
     args = parser.parse_args()
 
-    main(start_id=args.start_id, end_id=args.end_id)
+    main(
+        start_id=args.start_id,
+        end_id=args.end_id,
+        brand_filter=args.brand_filter,
+        model_filter=args.model_filter,
+        variant_filter=args.variant_filter,
+        table_source=args.table,
+    )
