@@ -10,6 +10,7 @@ from datetime import datetime
 from bs4 import BeautifulSoup
 from dotenv import load_dotenv
 from pathlib import Path
+from urllib.parse import urlparse
 from playwright.sync_api import sync_playwright
 from playwright_stealth import stealth_sync
 
@@ -164,6 +165,7 @@ class CarlistMyService:
         )
 
         self.page = self.context.new_page()
+        self.page.set_default_navigation_timeout(90000)
         stealth_sync(self.page)
         logging.info("✅ Browser Playwright berhasil diinisialisasi dengan stealth.")
 
@@ -222,8 +224,13 @@ class CarlistMyService:
 
         while retry_count < max_retries:
             try:
-                self.page.goto(url, wait_until="networkidle", timeout=60000)
-                time.sleep(7)
+                self.page.goto(url, wait_until="domcontentloaded", timeout=90000)
+                try:
+                    # Hindari menunggu network idle yang tidak selesai karena widget/chat, cukup pastikan konten utama muncul
+                    self.page.wait_for_selector("#listing-detail", timeout=20000)
+                except Exception as e:
+                    logging.warning(f"Selector listing detail tidak muncul tepat waktu: {e}")
+                time.sleep(5)
 
                 # Deteksi Cloudflare
                 page_title = self.page.title()
@@ -692,25 +699,65 @@ class CarlistMyService:
         logging.error(f"❌ Gagal mengambil data dari {url} setelah {max_retries} percobaan.")
         return None
 
-    def download_images(self, image_urls, brand, model, variant, car_id):
+    def sanitize_image_filename(self, url, fallback_name):
+        parsed = urlparse(url)
+        basename = os.path.basename(parsed.path)
+        if not basename:
+            basename = fallback_name
+        name, ext = os.path.splitext(basename)
+        if not ext:
+            ext = ".jpg"
+        return f"{name}{ext}"
+
+    def download_images(self, image_urls, brand, model, variant, car_id, referer=None):
         """
-        Download semua gambar ke folder images/brand/model/variant/id/
+        Download semua gambar ke folder images_carlist/brand/model/variant/id/
+        Menggunakan requests Session dengan UA + referer agar tidak mudah di-block.
         """
-        base_dir = Path("images_carlist") / str(brand).replace("/", "_") / str(model).replace("/", "_") / str(variant).replace("/", "_") / str(car_id)
+        if not image_urls:
+            return []
+
+        base_dir = (
+            Path("images_carlist")
+            / str(brand).replace("/", "_")
+            / str(model).replace("/", "_")
+            / str(variant).replace("/", "_")
+            / str(car_id)
+        )
         base_dir.mkdir(parents=True, exist_ok=True)
+
+        session = requests.Session()
+        session.headers.update(
+            {
+                "User-Agent": "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/136.0.0.0 Safari/537.36",
+            }
+        )
+        if referer:
+            session.headers["Referer"] = referer
+
         local_paths = []
         for idx, url in enumerate(image_urls):
+            if not url:
+                continue
+
+            file_name = self.sanitize_image_filename(url, f"image_{idx+1}.jpg")
+            file_path = base_dir / file_name
+
+            if file_path.exists():
+                local_paths.append(str(file_path))
+                continue
+
             try:
-                ext = os.path.splitext(url)[1].split("?")[0] or ".jpg"
-                file_name = f"image_{idx+1}{ext}"
-                file_path = base_dir / file_name
-                resp = requests.get(url, timeout=30)
-                if resp.status_code == 200:
-                    with open(file_path, "wb") as f:
-                        f.write(resp.content)
-                    local_paths.append(str(file_path))
+                resp = session.get(url, timeout=30, stream=True)
+                resp.raise_for_status()
+                with open(file_path, "wb") as f:
+                    for chunk in resp.iter_content(chunk_size=8192):
+                        if chunk:
+                            f.write(chunk)
+                local_paths.append(str(file_path))
             except Exception as e:
                 logging.warning(f"Gagal download gambar {url}: {e}")
+
         return local_paths
 
     def save_to_db(self, car):
@@ -729,7 +776,7 @@ class CarlistMyService:
             if row:
                 car_id, old_price, version, existing_ads_date = row
                 if self.download_images_locally:
-                    self.download_images(image_urls, brand, model, variant, car_id)
+                    self.download_images(image_urls, brand, model, variant, car_id, car.get("listing_url"))
                 ads_date_to_use = existing_ads_date or now.strftime("%Y-%m-%d")
                 self.cursor.execute(f"""
                     UPDATE {DB_TABLE_SCRAP}
@@ -760,7 +807,7 @@ class CarlistMyService:
                 ))
                 car_id = self.cursor.fetchone()[0]
                 if self.download_images_locally:
-                    self.download_images(image_urls, brand, model, variant, car_id)
+                    self.download_images(image_urls, brand, model, variant, car_id, car.get("listing_url"))
 
             self.conn.commit()
             logging.info(f"✅ Data untuk {car['listing_url']} berhasil disimpan/diupdate.")
