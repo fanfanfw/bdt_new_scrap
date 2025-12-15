@@ -32,6 +32,15 @@ def is_id_logged(id_):
 def create_folder(path):
     Path(path).mkdir(parents=True, exist_ok=True)
 
+def has_complete_download(folder_path: Path, expected_count: int) -> bool:
+    """
+    Cek apakah folder sudah berisi minimal expected_count file.
+    """
+    if not folder_path.exists():
+        return False
+    files = [p for p in folder_path.iterdir() if p.is_file()]
+    return len(files) >= expected_count if expected_count else True
+
 def sanitize_filename(url):
     filename = os.path.basename(urlparse(url).path)
     return filename
@@ -91,10 +100,6 @@ def main(
     for row in tqdm(rows):
         id_, brand, model, variant, images_str = row
 
-        if is_id_logged(id_):
-            print(f"🔁 Melewati ID {id_} (sudah di-log)")
-            continue
-
         brand = brand or "UNKNOWN"
         model = model or "UNKNOWN"
         variant = variant or "UNKNOWN"
@@ -106,6 +111,12 @@ def main(
 
         try:
             images_list = json.loads(images_str)
+            expected_count = len(images_list)
+
+            # Skip hanya jika sudah lengkap di filesystem dan sudah tercatat di log
+            if is_id_logged(id_) and has_complete_download(Path(folder_path), expected_count):
+                print(f"✅ Melewati ID {id_} (sudah lengkap di folder dan tercatat)")
+                continue
 
             for img_url in images_list:
                 filename = sanitize_filename(img_url)

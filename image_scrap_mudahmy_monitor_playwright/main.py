@@ -7,6 +7,7 @@ from pathlib import Path
 from database import get_connection
 from tqdm import tqdm
 from dotenv import load_dotenv
+from urllib.parse import urlparse
 
 load_dotenv(override=True)
 
@@ -73,6 +74,15 @@ proxies = {"http": proxy, "https": proxy} if proxy else None
 
 def create_folder(path):
     Path(path).mkdir(parents=True, exist_ok=True)
+
+def has_complete_download(folder_path: Path, expected_count: int) -> bool:
+    """
+    Cek apakah folder sudah berisi minimal expected_count file.
+    """
+    if not folder_path.exists():
+        return False
+    files = [p for p in folder_path.iterdir() if p.is_file()]
+    return len(files) >= expected_count if expected_count else True
 
 def is_valid_url(url):
     """
@@ -142,17 +152,6 @@ def main(
     for row in tqdm(rows):
         id_, brand, model, variant, images_str = row
 
-        status = get_status_for_id(id_)
-
-        if status == "SUCCESS":
-            print(f"🔁 Melewati ID {id_} (sudah di-log sebagai SUCCESS)")
-            continue
-        if status == "PARTIAL":
-            print(f"🔁 Melewati ID {id_} (sudah di-log sebagai PARTIAL)")
-            continue
-
-        print(f"🔁 Memulai download untuk ID {id_}")
-
         brand = brand or "UNKNOWN"
         model = model or "UNKNOWN"
         variant = variant or "UNKNOWN"
@@ -164,9 +163,19 @@ def main(
 
         try:
             images_list = json.loads(images_str)
+            expected_count = len(images_list)
+
+            status = get_status_for_id(id_)
+
+            # Skip hanya jika sudah lengkap di filesystem dan tercatat sukses
+            if status == "SUCCESS" and has_complete_download(Path(folder_path), expected_count):
+                print(f"✅ Melewati ID {id_} (folder sudah lengkap dan status SUCCESS)")
+                continue
+
+            print(f"🔁 Memulai download untuk ID {id_}")
 
             for img_url in images_list:
-                filename = img_url.split("/")[-1]
+                filename = os.path.basename(urlparse(img_url).path) or "image.jpg"
                 save_path = os.path.join(folder_path, filename)
 
                 if os.path.exists(save_path):
