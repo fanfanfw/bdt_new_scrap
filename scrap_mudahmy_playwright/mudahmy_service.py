@@ -218,7 +218,7 @@ class MudahMyService:
             logging.error(f"Error download {url}: {str(e)}")
 
     def download_listing_images(self, listing_url, image_urls, car_id):
-        """Download all images for a listing into images_mudah/brand/model/variant/db_id/image_{n}.jpg"""
+        """Download all images for a listing into images_mudah/brand/model/variant/year/db_id/image_{n}.jpg"""
         try:
             # Clean brand, model and variant names untuk nama folder yang aman
             def clean_filename(name):
@@ -228,8 +228,10 @@ class MudahMyService:
             brand = clean_filename(self.last_scraped_data.get("brand", "unknown"))
             model = clean_filename(self.last_scraped_data.get("model", "unknown"))
             variant = clean_filename(self.last_scraped_data.get("variant", "unknown"))
-            
-            folder_path = os.path.join("images_mudah", brand, model, variant, str(car_id))
+            year_match = re.search(r"\d{4}", str(self.last_scraped_data.get("year", "")))
+            year_segment = year_match.group(0) if year_match else "UNKNOWN_YEAR"
+
+            folder_path = os.path.join("images_mudah", brand, model, variant, year_segment, str(car_id))
             os.makedirs(folder_path, exist_ok=True)
             
             # Download setiap gambar

@@ -709,19 +709,21 @@ class CarlistMyService:
             ext = ".jpg"
         return f"{name}{ext}"
 
-    def download_images(self, image_urls, brand, model, variant, car_id, referer=None):
+    def download_images(self, image_urls, brand, model, variant, year, car_id, referer=None):
         """
-        Download semua gambar ke folder images_carlist/brand/model/variant/id/
+        Download semua gambar ke folder images_carlist/brand/model/variant/year/id/
         Menggunakan requests Session dengan UA + referer agar tidak mudah di-block.
         """
         if not image_urls:
             return []
 
+        year_segment = str(year).strip() if year else "UNKNOWN_YEAR"
         base_dir = (
             Path("images_carlist")
             / str(brand).replace("/", "_")
             / str(model).replace("/", "_")
             / str(variant).replace("/", "_")
+            / year_segment.replace("/", "_")
             / str(car_id)
         )
         base_dir.mkdir(parents=True, exist_ok=True)
@@ -776,7 +778,7 @@ class CarlistMyService:
             if row:
                 car_id, old_price, version, existing_ads_date = row
                 if self.download_images_locally:
-                    self.download_images(image_urls, brand, model, variant, car_id, car.get("listing_url"))
+                    self.download_images(image_urls, brand, model, variant, car.get("year"), car_id, car.get("listing_url"))
                 ads_date_to_use = existing_ads_date or now.strftime("%Y-%m-%d")
                 self.cursor.execute(f"""
                     UPDATE {DB_TABLE_SCRAP}
@@ -807,7 +809,7 @@ class CarlistMyService:
                 ))
                 car_id = self.cursor.fetchone()[0]
                 if self.download_images_locally:
-                    self.download_images(image_urls, brand, model, variant, car_id, car.get("listing_url"))
+                    self.download_images(image_urls, brand, model, variant, car.get("year"), car_id, car.get("listing_url"))
 
             self.conn.commit()
             logging.info(f"✅ Data untuk {car['listing_url']} berhasil disimpan/diupdate.")

@@ -1,6 +1,7 @@
 import argparse
 import json
 import os
+import re
 import sys
 from pathlib import Path
 
@@ -22,13 +23,25 @@ def normalize_segment(value: str) -> str:
         return "UNKNOWN"
     return str(value).strip().upper().replace("/", "_")
 
+def normalize_year(value) -> str:
+    """
+    Normalize year for folder naming. Falls back to UNKNOWN_YEAR when missing.
+    """
+    if value is None:
+        return "UNKNOWN_YEAR"
+    match = re.search(r"\d{4}", str(value))
+    if match:
+        return match.group(0)
+    cleaned = str(value).strip()
+    return cleaned if cleaned else "UNKNOWN_YEAR"
 
-def build_folder(base_folder: Path, brand: str, model: str, variant: str, car_id: int) -> Path:
+def build_folder(base_folder: Path, brand: str, model: str, variant: str, year, car_id: int) -> Path:
     return (
         base_folder
         / normalize_segment(brand)
         / normalize_segment(model)
         / normalize_segment(variant)
+        / normalize_year(year)
         / str(car_id)
     )
 
@@ -51,7 +64,7 @@ def check_site(name: str, conn, table: str, base_folder: Path, limit: int = None
     cursor = conn.cursor()
     cursor.execute(
         f"""
-        SELECT id, brand, model, variant, images
+        SELECT id, brand, model, variant, year, images
         FROM {table}
         WHERE images IS NOT NULL AND images != ''
         """
@@ -66,7 +79,7 @@ def check_site(name: str, conn, table: str, base_folder: Path, limit: int = None
 
     existing_folders = index_existing_folders(base_folder)
 
-    for idx, (car_id, brand, model, variant, images_str) in enumerate(rows, start=1):
+    for idx, (car_id, brand, model, variant, year, images_str) in enumerate(rows, start=1):
         if limit and idx > limit:
             break
 
@@ -77,7 +90,16 @@ def check_site(name: str, conn, table: str, base_folder: Path, limit: int = None
             json_error.append(car_id)
             continue
 
-        folder = build_folder(base_folder, brand, model, variant, car_id)
+        folder = build_folder(base_folder, brand, model, variant, year, car_id)
+        legacy_folder = (
+            base_folder
+            / normalize_segment(brand)
+            / normalize_segment(model)
+            / normalize_segment(variant)
+            / str(car_id)
+        )
+        if not folder.exists() and legacy_folder.exists():
+            folder = legacy_folder
         if not folder.exists():
             # Fallback: use any folder that matches the car_id regardless of brand/model/variant
             folder = existing_folders.get(car_id)

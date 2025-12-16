@@ -347,9 +347,11 @@ class MudahMyService:
             brand = clean_filename(self.last_scraped_data.get("brand", "unknown"))
             model = clean_filename(self.last_scraped_data.get("model", "unknown"))
             variant = clean_filename(self.last_scraped_data.get("variant", "unknown"))
+            year_value = self.convert_year_to_int(self.last_scraped_data.get("year"))
+            year_segment = str(year_value) if year_value else "UNKNOWN_YEAR"
 
             # Path penyimpanan gambar
-            folder_path = os.path.join(self.image_base_path, brand, model, variant, str(car_id))
+            folder_path = os.path.join(self.image_base_path, brand, model, variant, year_segment, str(car_id))
             os.makedirs(folder_path, exist_ok=True, mode=0o755)
 
             for idx, img_url in enumerate(image_urls):

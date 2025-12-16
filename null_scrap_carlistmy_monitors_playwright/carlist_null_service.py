@@ -495,8 +495,16 @@ class CarlistMyNullService:
             "image": images
         }
 
-    def download_images(self, image_urls, brand, model, variant, car_id):
-        base_dir = Path("images_carlist") / str(brand).replace("/", "_") / str(model).replace("/", "_") / str(variant).replace("/", "_") / str(car_id)
+    def download_images(self, image_urls, brand, model, variant, year, car_id):
+        year_segment = str(year).strip() if year else "UNKNOWN_YEAR"
+        base_dir = (
+            Path("images_carlist")
+            / str(brand).replace("/", "_")
+            / str(model).replace("/", "_")
+            / str(variant).replace("/", "_")
+            / year_segment.replace("/", "_")
+            / str(car_id)
+        )
         base_dir.mkdir(parents=True, exist_ok=True)
         local_paths = []
         for idx, url in enumerate(image_urls):
@@ -531,7 +539,7 @@ class CarlistMyNullService:
                 new_version = (version or 1) + 1
 
                 if self.download_images_locally:
-                    self.download_images(car.get("image"), brand, model, variant, car_id)
+                    self.download_images(car.get("image"), brand, model, variant, car.get("year"), car_id)
 
                 self.cursor.execute(f"""
                     UPDATE {DB_TABLE_SCRAP}

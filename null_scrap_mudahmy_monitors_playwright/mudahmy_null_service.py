@@ -303,7 +303,7 @@ class MudahMyNullService:
             logging.error(f"Error download {url}: {str(e)}")
 
     def download_listing_images(self, listing_url, image_urls, car_id):
-        """Download all images for a listing into images_mudah/brand/model/variant/db_id/image_{n}.jpg"""
+        """Download all images for a listing into images_mudah/brand/model/variant/year/db_id/image_{n}.jpg"""
         try:
             # Clean brand, model and variant names untuk nama folder yang aman
             def clean_filename(name):
@@ -313,9 +313,11 @@ class MudahMyNullService:
             brand = clean_filename(self.last_scraped_data.get("brand", "unknown"))
             model = clean_filename(self.last_scraped_data.get("model", "unknown"))
             variant = clean_filename(self.last_scraped_data.get("variant", "unknown"))
+            year_value = self.convert_year_to_int(self.last_scraped_data.get("year"))
+            year_segment = str(year_value) if year_value else "UNKNOWN_YEAR"
             
             # Gunakan path absolut dari self.image_base_path
-            folder_path = os.path.join(self.image_base_path, brand, model, variant, str(car_id))
+            folder_path = os.path.join(self.image_base_path, brand, model, variant, year_segment, str(car_id))
             # Buat folder dengan permission yang benar
             os.makedirs(folder_path, exist_ok=True, mode=0o755)
             

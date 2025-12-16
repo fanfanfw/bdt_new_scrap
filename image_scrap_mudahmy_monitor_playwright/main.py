@@ -1,5 +1,6 @@
 import os
 import json
+import re
 import requests
 import argparse
 import random
@@ -122,7 +123,7 @@ def main(
     table_name = DEFAULT_TABLE if table_source == DEFAULT_TABLE else ARCHIVE_TABLE
 
     query = f"""
-        SELECT id, brand, model, variant, images
+        SELECT id, brand, model, variant, year, images
         FROM {table_name}
         WHERE images IS NOT NULL AND images != ''
     """
@@ -150,13 +151,21 @@ def main(
     print(f"Total data ditemukan: {len(rows)}")
 
     for row in tqdm(rows):
-        id_, brand, model, variant, images_str = row
+        id_, brand, model, variant, year, images_str = row
 
         brand = brand or "UNKNOWN"
         model = model or "UNKNOWN"
         variant = variant or "UNKNOWN"
+        year_segment = "UNKNOWN_YEAR"
+        if year is not None:
+            match = re.search(r"\d{4}", str(year))
+            if match:
+                year_segment = match.group(0)
+            else:
+                cleaned_year = str(year).strip()
+                year_segment = cleaned_year if cleaned_year else "UNKNOWN_YEAR"
 
-        folder_path = os.path.join(BASE_FOLDER, brand, model, variant, str(id_))
+        folder_path = os.path.join(BASE_FOLDER, brand, model, variant, year_segment, str(id_))
         create_folder(folder_path)
 
         sukses, gagal = 0, 0

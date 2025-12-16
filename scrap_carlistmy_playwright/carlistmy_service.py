@@ -351,11 +351,19 @@ class CarlistMyService:
         logging.error(f"❌ Gagal mengambil data dari {url} setelah {max_retries} percobaan.")
         return None
 
-    def download_images(self, image_urls, brand, model, variant, car_id):
+    def download_images(self, image_urls, brand, model, variant, year, car_id):
         """
-        Download semua gambar ke folder images/brand/model/variant/id/
+        Download semua gambar ke folder images/brand/model/variant/year/id/
         """
-        base_dir = Path("images_carlist") / str(brand).replace("/", "_") / str(model).replace("/", "_") / str(variant).replace("/", "_") / str(car_id)
+        year_segment = str(year).strip() if year else "UNKNOWN_YEAR"
+        base_dir = (
+            Path("images_carlist")
+            / str(brand).replace("/", "_")
+            / str(model).replace("/", "_")
+            / str(variant).replace("/", "_")
+            / year_segment.replace("/", "_")
+            / str(car_id)
+        )
         base_dir.mkdir(parents=True, exist_ok=True)
         local_paths = []
         for idx, url in enumerate(image_urls):
@@ -393,7 +401,7 @@ class CarlistMyService:
                         VALUES (%s, %s, %s)
                     """, (car_id, old_price, car["price"]))
 
-                self.download_images(image_urls, brand, model, variant, car_id)
+                self.download_images(image_urls, brand, model, variant, car.get("year"), car_id)
 
                 self.cursor.execute(f"""
                     UPDATE {DB_TABLE_SCRAP}
@@ -422,7 +430,7 @@ class CarlistMyService:
                     car.get("seat_capacity"), car.get("engine_cc"), car.get("fuel_type"), 1, image_urls_str
                 ))
                 car_id = self.cursor.fetchone()[0]
-                self.download_images(image_urls, brand, model, variant, car_id)
+                self.download_images(image_urls, brand, model, variant, car.get("year"), car_id)
 
             self.conn.commit()
             logging.info(f"✅ Data untuk {car['listing_url']} berhasil disimpan/diupdate.")
