@@ -113,12 +113,36 @@ class DataArchiver:
             # LANGSUNG gunakan INSERT...SELECT untuk efficiency dan hindari cascade delete
             columns_str = ', '.join(original_columns)
             
-            # Insert ke archive menggunakan INSERT...SELECT
+            # Insert ke archive menggunakan INSERT...SELECT dengan upsert (hindari gagal duplikat listing_url)
             cutoff_date = datetime.now() - timedelta(days=months * 30)
             self.cursor.execute(f"""
                 INSERT INTO {archive_table} ({columns_str})
-                SELECT * FROM {cars_table}
+                SELECT {columns_str} FROM {cars_table}
                 WHERE information_ads_date < %s
+                ON CONFLICT (listing_url) DO UPDATE SET
+                    brand = COALESCE(EXCLUDED.brand, {archive_table}.brand),
+                    model_group = COALESCE(EXCLUDED.model_group, {archive_table}.model_group),
+                    model = COALESCE(EXCLUDED.model, {archive_table}.model),
+                    variant = COALESCE(EXCLUDED.variant, {archive_table}.variant),
+                    price = COALESCE(EXCLUDED.price, {archive_table}.price),
+                    mileage = COALESCE(EXCLUDED.mileage, {archive_table}.mileage),
+                    year = COALESCE(EXCLUDED.year, {archive_table}.year),
+                    transmission = COALESCE(EXCLUDED.transmission, {archive_table}.transmission),
+                    seat_capacity = COALESCE(EXCLUDED.seat_capacity, {archive_table}.seat_capacity),
+                    engine_cc = COALESCE(EXCLUDED.engine_cc, {archive_table}.engine_cc),
+                    fuel_type = COALESCE(EXCLUDED.fuel_type, {archive_table}.fuel_type),
+                    information_ads = COALESCE(EXCLUDED.information_ads, {archive_table}.information_ads),
+                    information_ads_date = COALESCE(EXCLUDED.information_ads_date, {archive_table}.information_ads_date),
+                    location = COALESCE(EXCLUDED.location, {archive_table}.location),
+                    condition = COALESCE(EXCLUDED.condition, {archive_table}.condition),
+                    last_scraped_at = COALESCE(EXCLUDED.last_scraped_at, {archive_table}.last_scraped_at),
+                    last_status_check = COALESCE(EXCLUDED.last_status_check, {archive_table}.last_status_check),
+                    images = COALESCE(EXCLUDED.images, {archive_table}.images),
+                    archived_at = NOW()
+                WHERE NOT (
+                    EXCLUDED.brand IS NULL AND EXCLUDED.model IS NULL AND EXCLUDED.variant IS NULL
+                    AND EXCLUDED.price IS NULL AND EXCLUDED.mileage IS NULL AND EXCLUDED.year IS NULL
+                )
             """, (cutoff_date,))
             
             inserted_count = self.cursor.rowcount
