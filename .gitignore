@@ -6,9 +6,7 @@ __pycache__
 *.pyo
 *.pyd   
 
-images/
-images_carlist/
-images_mudah/
+/images_*/
 logs/
 test.py
 docs/
