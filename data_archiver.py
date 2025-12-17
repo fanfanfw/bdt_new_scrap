@@ -210,6 +210,41 @@ class DataArchiver:
         except Exception as e:
             self.conn.rollback()
             logging.error(f"❌ Error archiving price history {price_history_table}: {e}")
+
+    def log_price_changes_to_archive(self, cars_table, archive_table, price_history_archive_table, cutoff_date):
+        """
+        Catat perubahan harga antara tabel utama dan arsip jika tidak ada catatan history di arsip.
+        Dipakai saat listing sudah ada di arsip dan akan diarsip ulang dengan harga baru.
+        """
+        try:
+            self.cursor.execute(f"""
+                INSERT INTO {price_history_archive_table} (old_price, new_price, changed_at, listing_url, archived_at)
+                SELECT a.price AS old_price,
+                       c.price AS new_price,
+                       NOW() AS changed_at,
+                       c.listing_url,
+                       NOW() AS archived_at
+                FROM {cars_table} c
+                JOIN {archive_table} a ON a.listing_url = c.listing_url
+                WHERE c.information_ads_date < %s
+                  AND a.price IS DISTINCT FROM c.price
+                  AND NOT EXISTS (
+                      SELECT 1 FROM {price_history_archive_table} ph
+                      WHERE ph.listing_url = c.listing_url
+                        AND ph.old_price = a.price
+                        AND ph.new_price = c.price
+                  )
+            """, (cutoff_date,))
+            
+            logged = self.cursor.rowcount
+            if logged > 0:
+                logging.info(f"  📝 {logged} perubahan harga dicatat ke {price_history_archive_table} (arsip vs tabel utama)")
+            else:
+                logging.info(f"  ℹ️  Tidak ada perubahan harga baru antara {cars_table} dan {archive_table}")
+        
+        except Exception as e:
+            self.conn.rollback()
+            logging.error(f"❌ Error mencatat perubahan harga ke arsip {price_history_archive_table}: {e}")
     
     def run_archive_process(self, months=6):
         """Menjalankan proses archiving lengkap"""
@@ -257,6 +292,14 @@ class DataArchiver:
             else:
                 logging.info("  ℹ️  Tidak ada price history carlistmy yang perlu diarsipkan")
             
+            # Catat perubahan harga jika listing sudah ada di arsip dengan harga berbeda
+            self.log_price_changes_to_archive(
+                'cars_scrap_carlistmy',
+                'cars_scrap_carlistmy_archive',
+                'price_history_scrap_carlistmy_archive',
+                cutoff_date
+            )
+            
             # KEDUA: Archive cars data
             self.archive_cars_data(
                 'cars_scrap_carlistmy', 
@@ -296,6 +339,14 @@ class DataArchiver:
                 logging.info(f"  ✅ {price_inserted_mudah} price history mudahmy diarsipkan (inserted: {price_inserted_mudah}, deleted: {price_deleted_mudah})")
             else:
                 logging.info("  ℹ️  Tidak ada price history mudahmy yang perlu diarsipkan")
+            
+            # Catat perubahan harga jika listing sudah ada di arsip dengan harga berbeda
+            self.log_price_changes_to_archive(
+                'cars_scrap_mudahmy',
+                'cars_scrap_mudahmy_archive',
+                'price_history_scrap_mudahmy_archive',
+                cutoff_date
+            )
             
             # Archive cars mudahmy
             self.archive_cars_data(
@@ -406,8 +457,8 @@ if __name__ == "__main__":
     logging.info("📊 Statistik sebelum archiving:")
     archiver.get_archive_statistics()
     
-    # Jalankan proses archiving untuk data > 6 bulan
-    archiver.run_archive_process(months=6)
+    # Jalankan proses archiving untuk data > 3 bulan
+    archiver.run_archive_process(months=3)
     
     # Tampilkan statistik setelah archiving
     logging.info("📊 Statistik setelah archiving:")
