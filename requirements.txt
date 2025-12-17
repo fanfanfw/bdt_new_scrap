@@ -35,7 +35,7 @@ playwright-stealth==1.0.6
 prometheus_client==0.22.1
 prompt_toolkit==3.0.51
 propcache==0.3.1
-psycopg2==2.9.10
+psycopg2-binary==2.9.10
 pyee==13.0.0
 python-dateutil==2.9.0.post0
 python-dotenv==1.1.0
